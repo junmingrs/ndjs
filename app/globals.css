@@ -24,3 +24,67 @@ body {
   color: var(--foreground);
   font-family: Arial, Helvetica, sans-serif;
 }
+
+/* Calendar styles */
+.calendar {
+  max-width: 720px;
+  margin: 0 auto;
+  border: 1px solid #e6e6e6;
+  border-radius: 8px;
+  padding: 12px;
+  background: white;
+}
+.calendar-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 8px;
+}
+.calendar-title {
+  font-weight: 600;
+}
+.calendar-weekdays {
+  display: grid;
+  grid-template-columns: repeat(7, 1fr);
+  gap: 6px;
+  text-align: center;
+  font-size: 12px;
+  color: #666;
+  margin-bottom: 6px;
+}
+.calendar-grid {
+  display: grid;
+  grid-template-columns: repeat(7, 1fr);
+  gap: 6px;
+}
+.calendar-day {
+  min-height: 90px;
+  border-radius: 6px;
+  padding: 8px;
+  background: #fafafa;
+  color: #111;
+}
+.calendar-day.other-month {
+  opacity: 0.45;
+}
+.calendar-day.today {
+  box-shadow: 0 0 0 2px #2563eb33 inset;
+  border: 1px solid #2563eb33;
+}
+.date-number {
+  font-size: 14px;
+  font-weight: 600;
+}
+
+button[aria-label] {
+  background: transparent;
+  border: none;
+  cursor: pointer;
+  font-size: 16px;
+}
+
+@media (prefers-color-scheme: dark) {
+  .calendar { background: #0b0b0b; border-color: #222; }
+  .calendar-day { background: #080808; color: #ddd; }
+}
