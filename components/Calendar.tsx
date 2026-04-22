@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, useRef, useEffect, useCallback } from "react";
+import { createClient } from "@/lib/supabase/client";
 
 // ── Types ──────────────────────────────────────────────────────────────────
 type StarLevel = 1 | 2 | 3;
@@ -18,7 +19,6 @@ interface Task {
   stars: StarLevel;
   color: TagColor;
   done: boolean;
-  source?: "gmail";    // present only for tasks imported from Gmail
 }
 
 // ── Constants ──────────────────────────────────────────────────────────────
@@ -279,9 +279,6 @@ export default function Calendar() {
   const [taskStars, setTaskStars] = useState<StarLevel>(1);
   const [taskColor, setTaskColor] = useState<TagColor>("blue");
 
-  // Email popup state
-  const [emailPopupTask, setEmailPopupTask] = useState<Task | null>(null);
-
   const weekScrollRef = useRef<HTMLDivElement>(null);
   const dayScrollRef  = useRef<HTMLDivElement>(null);
 
@@ -352,6 +349,12 @@ export default function Calendar() {
 
   function toggleDone(id: string) {
     setTasks(prev => prev.map(t => t.id === id ? { ...t, done: !t.done } : t));
+  }
+
+  async function handleLogout() {
+    const supabase = createClient();
+    await supabase.auth.signOut();
+    window.location.href = "/";
   }
 
   const displayedTasks = sortByPriority
@@ -673,12 +676,6 @@ export default function Calendar() {
                   </div>
                 </div>
                 <div style={{ position: "absolute", top: 8, right: 8, display: "flex", gap: 4 }}>
-                  {t.source === "gmail" && (
-                    <button onClick={() => setEmailPopupTask(t)} title="Send email update" style={{ background: "none", border: "none", color: "#6b7280", cursor: "pointer", fontSize: 12, padding: "2px 4px", borderRadius: 4, transition: "color .15s" }}
-                      onMouseEnter={e => (e.currentTarget.style.color = "#34d399")}
-                      onMouseLeave={e => (e.currentTarget.style.color = "#6b7280")}
-                    >✉</button>
-                  )}
                   <button onClick={() => startEdit(t)} title="Edit" style={{ background: "none", border: "none", color: "#6b7280", cursor: "pointer", fontSize: 12, padding: "2px 4px", borderRadius: 4, transition: "color .15s" }}
                     onMouseEnter={e => (e.currentTarget.style.color = "#a5b4fc")}
                     onMouseLeave={e => (e.currentTarget.style.color = "#6b7280")}
@@ -691,6 +688,38 @@ export default function Calendar() {
               </div>
             );
           })}
+        </div>
+
+        {/* ── LOGOUT BUTTON ── */}
+        <div style={{ padding: "12px 14px", borderTop: "1px solid rgba(255,255,255,.08)", flexShrink: 0 }}>
+          <button
+            onClick={handleLogout}
+            style={{
+              width: "100%", display: "flex", alignItems: "center", gap: 10,
+              padding: "9px 14px", borderRadius: 10, cursor: "pointer",
+              background: "rgba(251,113,133,.06)", border: "1px solid rgba(251,113,133,.18)",
+              color: "#9ca3af", fontSize: 13, fontWeight: 500,
+              transition: "all .18s",
+            }}
+            onMouseEnter={e => {
+              e.currentTarget.style.background = "rgba(251,113,133,.14)";
+              e.currentTarget.style.borderColor = "rgba(251,113,133,.45)";
+              e.currentTarget.style.color = "#fb7185";
+            }}
+            onMouseLeave={e => {
+              e.currentTarget.style.background = "rgba(251,113,133,.06)";
+              e.currentTarget.style.borderColor = "rgba(251,113,133,.18)";
+              e.currentTarget.style.color = "#9ca3af";
+            }}
+          >
+            {/* Logout icon */}
+            <svg width="15" height="15" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" viewBox="0 0 24 24" style={{ flexShrink: 0 }}>
+              <path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4" />
+              <polyline points="16 17 21 12 16 7" />
+              <line x1="21" y1="12" x2="9" y2="12" />
+            </svg>
+            Log out
+          </button>
         </div>
       </aside>
 
@@ -879,350 +908,6 @@ export default function Calendar() {
           </div>
         )}
       </main>
-
-      {/* ── EMAIL POPUP ── */}
-      {emailPopupTask && (
-        <TaskEmailPopup
-          taskName={emailPopupTask.title}
-          onClose={() => setEmailPopupTask(null)}
-        />
-      )}
-    </div>
-  );
-}
-
-// ── TaskEmailPopup Component ───────────────────────────────────────────────
-type RecipientType = "Direct Manager" | "Senior Colleague" | "Peer" | "Client";
-
-interface TaskEmailPopupProps {
-  taskName: string;
-  onClose: () => void;
-}
-
-function TaskEmailPopup({ taskName, onClose }: TaskEmailPopupProps) {
-  const [recipientType, setRecipientType] = useState<RecipientType | null>(null);
-  const [relationDesc, setRelationDesc] = useState("");
-  const [notes, setNotes] = useState("");
-  const [step, setStep] = useState<"compose" | "draft">("compose");
-
-  const [draftSubject, setDraftSubject] = useState("");
-  const [draftBody, setDraftBody] = useState("");
-  const [isLoading, setIsLoading] = useState(false);
-  const [error, setError] = useState("");
-
-  const [subjectEditable, setSubjectEditable] = useState(false);
-  const [bodyEditable, setBodyEditable] = useState(false);
-  const [editingSubject, setEditingSubject] = useState("");
-  const [editingBody, setEditingBody] = useState("");
-  const [copied, setCopied] = useState(false);
-
-  const overlayRef = useRef<HTMLDivElement>(null);
-
-  function handleOverlayClick(e: React.MouseEvent<HTMLDivElement>) {
-    if (e.target === overlayRef.current) onClose();
-  }
-
-  useEffect(() => {
-    function handler(e: KeyboardEvent) {
-      if (e.key === "Escape") onClose();
-    }
-    document.addEventListener("keydown", handler);
-    return () => document.removeEventListener("keydown", handler);
-  }, [onClose]);
-
-  async function handleFormat() {
-    if (!recipientType || !notes.trim()) return;
-    setIsLoading(true);
-    setError("");
-    setStep("draft");
-
-    const prompt = `You are a professional email writing assistant.
-Task: "${taskName}"
-Recipient type: ${recipientType}
-${relationDesc.trim() ? `Relation context: ${relationDesc.trim()}` : ""}
-What was done: ${notes.trim()}
-
-Write a professional status update email for this task.
-Return ONLY a JSON object (no markdown, no backticks) in this exact format:
-{"subject":"<email subject line>","body":"<full email body with \\n for line breaks>"}`;
-
-    try {
-      const response = await fetch("https://api.anthropic.com/v1/messages", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          model: "claude-sonnet-4-20250514",
-          max_tokens: 1000,
-          messages: [{ role: "user", content: prompt }],
-        }),
-      });
-      const data = await response.json();
-      const text = data.content?.map((i: { type: string; text?: string }) => i.text || "").join("") || "";
-      const clean = text.replace(/```json|```/g, "").trim();
-      const parsed = JSON.parse(clean);
-      setDraftSubject(parsed.subject || "");
-      setDraftBody(parsed.body || "");
-    } catch {
-      setError("Failed to generate draft. Please try again.");
-      setStep("compose");
-    } finally {
-      setIsLoading(false);
-    }
-  }
-
-  function copyDraft() {
-    const text = `Subject: ${draftSubject}\n\n${draftBody}`;
-    navigator.clipboard.writeText(text).then(() => {
-      setCopied(true);
-      setTimeout(() => setCopied(false), 2000);
-    });
-  }
-
-  function regenerate() {
-    setDraftSubject("");
-    setDraftBody("");
-    handleFormat();
-  }
-
-  const EP: Record<string, React.CSSProperties> = {
-    overlay: {
-      position: "fixed", inset: 0,
-      background: "rgba(0,0,0,0.65)",
-      backdropFilter: "blur(4px)",
-      display: "flex", alignItems: "center", justifyContent: "center",
-      zIndex: 9999,
-    },
-    popup: {
-      background: "#1e2033",
-      border: "1px solid rgba(255,255,255,.14)",
-      borderRadius: 16,
-      width: 660,
-      maxWidth: "95vw",
-      boxShadow: "0 24px 64px rgba(0,0,0,.7)",
-      overflow: "hidden",
-      fontFamily: "'Segoe UI', system-ui, sans-serif",
-      color: "#e5e7eb",
-    },
-    header: {
-      padding: "14px 20px",
-      borderBottom: "1px solid rgba(255,255,255,.1)",
-      display: "flex", alignItems: "center", justifyContent: "space-between",
-      background: "#16213e",
-    },
-    body: { display: "flex", minHeight: 340 },
-    leftPanel: {
-      flex: 1, padding: "18px 20px", borderRight: "1px solid rgba(255,255,255,.08)",
-      display: "flex", flexDirection: "column", gap: 14,
-    },
-    rightPanel: {
-      flex: 1, padding: "18px 20px",
-      display: "flex", flexDirection: "column", gap: 12,
-    },
-    panelLabel: {
-      fontSize: 10, fontWeight: 600, letterSpacing: "0.1em",
-      textTransform: "uppercase" as const, color: "#6b7280", marginBottom: 2,
-    },
-    textInput: {
-      width: "100%",
-      background: "rgba(255,255,255,.05)",
-      border: "1px solid rgba(255,255,255,.12)",
-      borderRadius: 8, padding: "8px 12px",
-      fontSize: 12, color: "#e5e7eb", outline: "none",
-      colorScheme: "dark" as const,
-      boxSizing: "border-box" as const,
-    },
-    textarea: {
-      width: "100%", flex: 1,
-      background: "rgba(255,255,255,.05)",
-      border: "1px solid rgba(255,255,255,.12)",
-      borderRadius: 8, padding: "10px 12px",
-      fontSize: 12, color: "#e5e7eb", outline: "none",
-      resize: "none" as const, colorScheme: "dark" as const,
-      boxSizing: "border-box" as const, lineHeight: 1.6,
-    },
-    footer: {
-      padding: "12px 20px",
-      borderTop: "1px solid rgba(255,255,255,.1)",
-      display: "flex", justifyContent: "flex-end", gap: 8,
-      background: "#191b2d",
-    },
-    toolbar: {
-      display: "flex", alignItems: "center", gap: 2,
-      padding: "6px 10px",
-      background: "rgba(255,255,255,.03)",
-      border: "1px solid rgba(255,255,255,.1)",
-      borderRadius: 8, marginBottom: 4,
-    },
-  };
-
-  const canFormat = !!recipientType && notes.trim().length > 0;
-
-  const recipientBtn = (active: boolean): React.CSSProperties => ({
-    padding: "5px 12px", borderRadius: 8, cursor: "pointer", fontSize: 12,
-    fontWeight: active ? 600 : 400,
-    border: active ? "1px solid rgba(99,102,241,.7)" : "1px solid rgba(255,255,255,.16)",
-    background: active ? "rgba(99,102,241,.18)" : "rgba(255,255,255,.04)",
-    color: active ? "#a5b4fc" : "#9ca3af",
-    transition: "all .15s",
-  });
-
-  const editableBadge = (active: boolean): React.CSSProperties => ({
-    fontSize: 10, fontWeight: 500, padding: "2px 8px", borderRadius: 20,
-    border: active ? "1px solid rgba(99,102,241,.6)" : "1px solid rgba(255,255,255,.15)",
-    background: active ? "rgba(99,102,241,.12)" : "rgba(255,255,255,.04)",
-    color: active ? "#a5b4fc" : "#6b7280", cursor: "pointer", userSelect: "none" as const,
-  });
-
-  const formatBtn = (disabled: boolean, override?: string): React.CSSProperties => ({
-    padding: "7px 22px", borderRadius: 8, cursor: disabled ? "not-allowed" : "pointer",
-    fontSize: 13, fontWeight: 600, border: "none",
-    background: override ?? (disabled ? "rgba(99,102,241,.3)" : "#6366f1"),
-    color: disabled ? "rgba(255,255,255,.4)" : "#fff",
-    transition: "background .15s",
-  });
-
-  const skeletonLine = (width: string): React.CSSProperties => ({
-    height: 12, borderRadius: 4,
-    background: "rgba(255,255,255,.07)",
-    width, marginBottom: 8,
-    animation: "pulse 1.4s ease-in-out infinite",
-  });
-
-  const composeStep = (
-    <>
-      <div style={EP.body}>
-        <div style={{ flex: 1, padding: "18px 20px", display: "flex", flexDirection: "column", gap: 14 }}>
-          <div>
-            <div style={EP.panelLabel}>Recipient type</div>
-            <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
-              {(["Direct Manager", "Senior Colleague", "Peer", "Client"] as RecipientType[]).map(r => (
-                <button key={r} onClick={() => setRecipientType(r)} style={recipientBtn(recipientType === r)}>{r}</button>
-              ))}
-            </div>
-          </div>
-          <div>
-            <div style={EP.panelLabel}>Your relation to recipient</div>
-            <input style={EP.textInput} placeholder="Description of relation with recipient" value={relationDesc} onChange={e => setRelationDesc(e.target.value)} />
-          </div>
-          <div style={{ flex: 1, display: "flex", flexDirection: "column" }}>
-            <div style={EP.panelLabel}>What you have done</div>
-            <textarea style={{ ...EP.textarea, minHeight: 160 }} placeholder={`What you have done for ${taskName}`} value={notes} onChange={e => setNotes(e.target.value)} />
-          </div>
-        </div>
-      </div>
-      <div style={EP.footer}>
-        <button style={{ padding: "7px 18px", borderRadius: 8, cursor: "pointer", fontSize: 13, border: "1px solid rgba(255,255,255,.14)", background: "rgba(255,255,255,.05)", color: "#9ca3af" }} onClick={onClose}>Cancel</button>
-        <button style={formatBtn(!canFormat)} disabled={!canFormat} onClick={handleFormat}>Format</button>
-      </div>
-    </>
-  );
-
-  const draftStep = (
-    <>
-      <style>{`@keyframes pulse { 0%,100%{opacity:.5} 50%{opacity:1} }`}</style>
-      <div style={EP.body}>
-        {/* Left: notes recap */}
-        <div style={{ ...EP.leftPanel, maxWidth: 240, minWidth: 200 }}>
-          <div>
-            <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 6 }}>
-              <div style={EP.panelLabel}>Your notes</div>
-              <span style={editableBadge(false)}>editable</span>
-            </div>
-            <div style={{ fontSize: 12, color: "rgba(255,255,255,.7)", lineHeight: 1.65, background: "rgba(255,255,255,.03)", borderRadius: 8, padding: "10px 12px", border: "1px solid rgba(255,255,255,.08)", minHeight: 100 }}>
-              {notes}
-            </div>
-          </div>
-          <div>
-            <div style={EP.panelLabel}>Recipient</div>
-            <div style={{ display: "inline-flex", alignItems: "center", gap: 6, background: "rgba(99,102,241,.12)", border: "1px solid rgba(99,102,241,.4)", borderRadius: 20, padding: "3px 10px", fontSize: 11, color: "#a5b4fc" }}>
-              <div style={{ width: 6, height: 6, borderRadius: "50%", background: "#818cf8" }} />
-              {recipientType}
-            </div>
-          </div>
-          <button onClick={regenerate} disabled={isLoading} style={{ marginTop: "auto", padding: "6px 12px", borderRadius: 8, cursor: isLoading ? "not-allowed" : "pointer", fontSize: 11, border: "1px solid rgba(255,255,255,.14)", background: "rgba(255,255,255,.04)", color: "#9ca3af", display: "flex", alignItems: "center", gap: 6 }}>
-            <span style={{ fontSize: 14, lineHeight: 1 }}>↺</span> Regenerate
-          </button>
-        </div>
-
-        {/* Right: formatted draft */}
-        <div style={EP.rightPanel}>
-          <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
-            <div style={EP.panelLabel}>Formatted draft</div>
-            <span style={editableBadge(bodyEditable)} onClick={() => {
-              if (!bodyEditable) { setEditingSubject(draftSubject); setEditingBody(draftBody); }
-              else { setDraftSubject(editingSubject); setDraftBody(editingBody); }
-              setBodyEditable(v => !v); setSubjectEditable(v => !v);
-            }}>
-              {bodyEditable ? "done editing" : "editable"}
-            </span>
-          </div>
-          <div style={EP.toolbar}>
-            {["B", "I", "U", "≡", "🔗", "Aᵥ"].map((t, i) => (
-              <button key={i} style={{ background: "none", border: "none", color: "#9ca3af", cursor: "pointer", padding: "3px 6px", borderRadius: 4, fontSize: 12, fontWeight: 600 }}>{t}</button>
-            ))}
-          </div>
-          {isLoading ? (
-            <div style={{ padding: "4px 0", flex: 1 }}>
-              <div style={skeletonLine("60%")} /><div style={{ height: 8 }} />
-              <div style={skeletonLine("90%")} /><div style={skeletonLine("80%")} />
-              <div style={skeletonLine("85%")} /><div style={{ height: 8 }} />
-              <div style={skeletonLine("75%")} /><div style={skeletonLine("70%")} />
-            </div>
-          ) : (
-            <div style={{ flex: 1, display: "flex", flexDirection: "column", gap: 10 }}>
-              <div style={{ display: "flex", alignItems: "center", gap: 8, borderBottom: "1px solid rgba(255,255,255,.08)", paddingBottom: 8 }}>
-                <span style={{ fontSize: 11, color: "#6b7280", width: 24, flexShrink: 0 }}>To</span>
-                <span style={{ fontSize: 12, color: "#9ca3af" }}>{recipientType === "Direct Manager" ? "manager@company.com" : recipientType === "Client" ? "client@organization.com" : "colleague@company.com"}</span>
-              </div>
-              <div style={{ display: "flex", alignItems: "center", gap: 8, borderBottom: "1px solid rgba(255,255,255,.08)", paddingBottom: 8 }}>
-                <span style={{ fontSize: 11, color: "#6b7280", width: 24, flexShrink: 0 }}>Cc</span>
-                <span style={{ fontSize: 11, color: "rgba(255,255,255,.2)" }}>Add recipients</span>
-              </div>
-              {subjectEditable
-                ? <input value={editingSubject} onChange={e => setEditingSubject(e.target.value)} style={{ ...EP.textInput, fontSize: 13, fontWeight: 600 }} autoFocus />
-                : <div style={{ fontSize: 13, fontWeight: 600, color: "#e5e7eb" }}>{draftSubject || <span style={{ color: "#4b5563" }}>Generating subject…</span>}</div>
-              }
-              {bodyEditable
-                ? <textarea value={editingBody} onChange={e => setEditingBody(e.target.value)} style={{ ...EP.textarea, flex: 1, minHeight: 120 }} />
-                : <div style={{ fontSize: 12, color: "rgba(255,255,255,.75)", lineHeight: 1.7, flex: 1, overflowY: "auto", whiteSpace: "pre-wrap" }}>{draftBody || <span style={{ color: "#4b5563" }}>Generating body…</span>}</div>
-              }
-              <div style={{ fontSize: 10, color: "#4b5563", textAlign: "right" }}>{(draftSubject + draftBody).length} chars</div>
-            </div>
-          )}
-          {error && <div style={{ fontSize: 12, color: "#fb7185", padding: "6px 10px", background: "rgba(244,63,94,.1)", borderRadius: 6, border: "1px solid rgba(244,63,94,.25)" }}>{error}</div>}
-        </div>
-      </div>
-      <div style={EP.footer}>
-        <button style={{ padding: "7px 18px", borderRadius: 8, cursor: "pointer", fontSize: 13, border: "1px solid rgba(255,255,255,.14)", background: "rgba(255,255,255,.05)", color: "#9ca3af" }} onClick={onClose}>Cancel</button>
-        <button style={formatBtn(isLoading || !draftBody, copied ? "#10b981" : undefined)} disabled={isLoading || !draftBody} onClick={copyDraft}>
-          {copied ? "✓ Copied!" : "Copy draft"}
-        </button>
-      </div>
-    </>
-  );
-
-  return (
-    <div ref={overlayRef} style={EP.overlay} onClick={handleOverlayClick}>
-      <div style={EP.popup}>
-        <div style={EP.header}>
-          <div>
-            <div style={{ fontSize: 13, fontWeight: 600, color: "#a5b4fc", letterSpacing: "0.04em" }}>✉ Task Update Email</div>
-            <div style={{ fontSize: 11, color: "#6b7280", marginTop: 2 }}>{taskName}</div>
-          </div>
-          <button style={{ background: "none", border: "none", color: "#6b7280", cursor: "pointer", fontSize: 18, padding: "2px 6px", borderRadius: 6, lineHeight: 1 }} onClick={onClose}
-            onMouseEnter={e => (e.currentTarget.style.color = "#fb7185")}
-            onMouseLeave={e => (e.currentTarget.style.color = "#6b7280")}
-          >✕</button>
-        </div>
-        <div style={{ display: "flex", borderBottom: "1px solid rgba(255,255,255,.1)", background: "#191b2d" }}>
-          {[{ label: "1  Compose", s: "compose" }, { label: "2  Draft", s: "draft" }].map(tab => (
-            <div key={tab.s} style={{ padding: "8px 18px", fontSize: 11, fontWeight: 600, cursor: "pointer", letterSpacing: "0.06em", textTransform: "uppercase", borderBottom: step === tab.s ? "2px solid #6366f1" : "2px solid transparent", color: step === tab.s ? "#a5b4fc" : "#4b5563", transition: "color .15s" }}
-              onClick={() => { if (tab.s === "compose" || draftSubject) setStep(tab.s as "compose" | "draft"); }}
-            >{tab.label}</div>
-          ))}
-        </div>
-        {step === "compose" ? composeStep : draftStep}
-      </div>
     </div>
   );
 }
