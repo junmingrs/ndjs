@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useRef, useEffect, useCallback } from "react";
+import { useState, useRef, useEffect } from "react";
 
 // ── Types ──────────────────────────────────────────────────────────────────
 type StarLevel = 1 | 2 | 3;
@@ -20,6 +20,18 @@ interface Task {
   done: boolean;
   source?: "gmail";    // present only for tasks imported from Gmail
 }
+
+type DbItem = {
+  id: string;
+  title: string;
+  dateStart: string;
+  dateEnd: string;
+  star: number;
+  type: string;
+  complete?: boolean;
+  completed?: boolean;
+  userId: string;
+};
 
 // ── Constants ──────────────────────────────────────────────────────────────
 const MONTHS = [
@@ -62,6 +74,48 @@ function getDaysInMonth(y: number, m: number) {
 }
 function getFirstDay(y: number, m: number) {
   return new Date(y, m, 1).getDay();
+}
+
+function fromDbItem(item: DbItem): Task {
+  const start = new Date(item.dateStart);
+  const end = new Date(item.dateEnd);
+
+  const date = toDateStr(start.getFullYear(), start.getMonth(), start.getDate());
+  const timeStr = `${pad(start.getHours())}:${pad(start.getMinutes())}`;
+  const endTimeStr = `${pad(end.getHours())}:${pad(end.getMinutes())}`;
+
+  const stars: StarLevel = item.star === 3 ? 3 : item.star === 2 ? 2 : 1;
+  const color: TagColor = item.type === "meeting" ? "rose" : item.type === "task" ? "green" : "blue";
+
+  return {
+    id: item.id,
+    title: item.title,
+    date,
+    timeStr,
+    endTimeStr,
+    hour: start.getHours(),
+    minute: start.getMinutes(),
+    stars,
+    color,
+    done: item.complete ?? item.completed ?? false,
+  };
+}
+
+function toDbPayload(task: Task) {
+  const dateStart = new Date(`${task.date}T${task.timeStr}`);
+  const dateEnd = new Date(`${task.date}T${task.endTimeStr}`);
+
+  const type = task.color === "rose" ? "meeting" : task.color === "green" ? "task" : "event";
+
+  return {
+    id: task.id,
+    title: task.title,
+    dateStart: dateStart.toISOString(),
+    dateEnd: dateEnd.toISOString(),
+    star: task.stars,
+    type,
+    complete: task.done,
+  };
 }
 
 // ── Sub-components ─────────────────────────────────────────────────────────
@@ -143,8 +197,6 @@ function DayColumn({ tasks, dateStr: ds }: { tasks: Task[]; dateStr: string }) {
   const now = new Date();
   const isToday = ds === todayStr();
   const nowTop = ((now.getHours() * 60 + now.getMinutes()) / 60) * CELL_HEIGHT;
-  const totalHeight = HOUR_LABELS.length * CELL_HEIGHT;
-
   const dayTasks = tasks.filter(t => t.date === ds);
 
   return (
@@ -281,6 +333,7 @@ export default function Calendar() {
 
   // Email popup state
   const [emailPopupTask, setEmailPopupTask] = useState<Task | null>(null);
+  const [itemsLoading, setItemsLoading] = useState(true);
 
   const weekScrollRef = useRef<HTMLDivElement>(null);
   const dayScrollRef  = useRef<HTMLDivElement>(null);
@@ -304,11 +357,41 @@ export default function Calendar() {
     return () => document.removeEventListener("mousedown", handler);
   }, []);
 
+  useEffect(() => {
+    let isMounted = true;
+
+    async function loadItems() {
+      try {
+        const response = await fetch("/api/items", { method: "GET" });
+        if (!response.ok) {
+          return;
+        }
+
+        const data = (await response.json()) as { items?: DbItem[] };
+        if (!isMounted) {
+          return;
+        }
+
+        setTasks((data.items ?? []).map(fromDbItem));
+      } finally {
+        if (isMounted) {
+          setItemsLoading(false);
+        }
+      }
+    }
+
+    loadItems();
+
+    return () => {
+      isMounted = false;
+    };
+  }, []);
+
   // ── Task helpers ──────────────────────────────────────────────────────
-  function addTask() {
+  async function addTask() {
     if (!taskTitle.trim() || !taskDate) return;
     const [hour, minute] = taskTime.split(":").map(Number);
-    setTasks(prev => [{
+    const newTask: Task = {
       id: crypto.randomUUID(),
       title: taskTitle.trim(),
       date: taskDate,
@@ -319,12 +402,42 @@ export default function Calendar() {
       stars: taskStars,
       color: taskColor,
       done: false,
-    }, ...prev]);
+    };
+
+    setTasks(prev => [newTask, ...prev]);
+
+    try {
+      const response = await fetch("/api/items", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(toDbPayload(newTask)),
+      });
+
+      if (!response.ok) {
+        setTasks(prev => prev.filter(t => t.id !== newTask.id));
+      }
+    } catch {
+      setTasks(prev => prev.filter(t => t.id !== newTask.id));
+    }
+
     setTaskTitle("");
   }
 
-  function deleteTask(id: string) {
+  async function deleteTask(id: string) {
+    const previous = tasks;
     setTasks(prev => prev.filter(t => t.id !== id));
+
+    try {
+      const response = await fetch(`/api/items?id=${encodeURIComponent(id)}`, {
+        method: "DELETE",
+      });
+
+      if (!response.ok) {
+        setTasks(previous);
+      }
+    } catch {
+      setTasks(previous);
+    }
   }
 
   function startEdit(t: Task) {
@@ -337,21 +450,60 @@ export default function Calendar() {
     setEditColor(t.color);
   }
 
-  function saveEdit() {
+  async function saveEdit() {
     if (!editingId || !editTitle.trim()) return;
     const [hour, minute] = editTime.split(":").map(Number);
-    setTasks(prev => prev.map(t =>
+    const updatedTasks = tasks.map(t =>
       t.id === editingId
         ? { ...t, title: editTitle.trim(), date: editDate, timeStr: editTime, endTimeStr: editEndTime, hour, minute, stars: editStars, color: editColor, done: t.done }
         : t
-    ));
+    );
+    setTasks(updatedTasks);
+
+    const updated = updatedTasks.find(t => t.id === editingId);
+    if (updated) {
+      try {
+        const response = await fetch("/api/items", {
+          method: "PUT",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(toDbPayload(updated)),
+        });
+
+        if (!response.ok) {
+          setTasks(tasks);
+        }
+      } catch {
+        setTasks(tasks);
+      }
+    }
+
     setEditingId(null);
   }
 
   function cancelEdit() { setEditingId(null); }
 
-  function toggleDone(id: string) {
-    setTasks(prev => prev.map(t => t.id === id ? { ...t, done: !t.done } : t));
+  async function toggleDone(id: string) {
+    const existing = tasks.find(t => t.id === id);
+    if (!existing) {
+      return;
+    }
+
+    const nextDone = !existing.done;
+    setTasks(prev => prev.map(t => t.id === id ? { ...t, done: nextDone } : t));
+
+    try {
+      const response = await fetch("/api/items", {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ id, complete: nextDone }),
+      });
+
+      if (!response.ok) {
+        setTasks(prev => prev.map(t => t.id === id ? { ...t, done: existing.done } : t));
+      }
+    } catch {
+      setTasks(prev => prev.map(t => t.id === id ? { ...t, done: existing.done } : t));
+    }
   }
 
   const displayedTasks = sortByPriority
@@ -563,7 +715,7 @@ export default function Calendar() {
 
         {/* Task list */}
         <div style={{ flex: 1, overflowY: "auto", padding: "12px 14px", display: "flex", flexDirection: "column", gap: 8 }}>
-          {displayedTasks.length === 0 && (
+          {!itemsLoading && displayedTasks.length === 0 && (
             <p style={{ textAlign: "center", fontSize: 12, color: "#6b7280", marginTop: 32 }}>
               No tasks yet. Add one above!
             </p>
