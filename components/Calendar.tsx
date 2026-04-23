@@ -39,6 +39,11 @@ type GmailTasksResponse = {
   error?: string;
 };
 
+type CalendarTasksResponse = {
+  tasks?: Task[];
+  error?: string;
+};
+
 type FormattedDraft = {
   recipient: string;
   subject: string;
@@ -349,6 +354,8 @@ export default function Calendar() {
   const [itemsLoading, setItemsLoading] = useState(true);
   const [gmailImporting, setGmailImporting] = useState(false);
   const [gmailImportStatus, setGmailImportStatus] = useState<string | null>(null);
+  const [calendarImporting, setCalendarImporting] = useState(false);
+  const [calendarImportStatus, setCalendarImportStatus] = useState<string | null>(null);
   const [gmailTaskIds, setGmailTaskIds] = useState<Set<string>>(new Set());
 
   // Gmail completion popup state
@@ -738,6 +745,88 @@ export default function Calendar() {
     }
   }
 
+  async function importGoogleCalendarTasks() {
+    if (calendarImporting) {
+      return;
+    }
+
+    setCalendarImporting(true);
+    setCalendarImportStatus(null);
+
+    try {
+      const response = await fetch("/api/google-calendar/today", {
+        method: "GET",
+        cache: "no-store",
+      });
+
+      const data = (await response.json()) as CalendarTasksResponse;
+
+      if (!response.ok) {
+        throw new Error(data.error ?? "Failed to import Google Calendar events");
+      }
+
+      const importedTasks = data.tasks ?? [];
+      const toSignature = (task: Pick<Task, "title" | "date" | "timeStr" | "endTimeStr">) =>
+        `${task.date}|${task.timeStr}|${task.endTimeStr}|${task.title.trim().toLowerCase()}`;
+
+      const existingSignatures = new Set(tasks.map((task) => toSignature(task)));
+      const seenImportSignatures = new Set<string>();
+
+      const newTasks = importedTasks
+        .filter((task) => {
+          const signature = toSignature(task);
+          if (existingSignatures.has(signature) || seenImportSignatures.has(signature)) {
+            return false;
+          }
+          seenImportSignatures.add(signature);
+          return true;
+        })
+        .map((task) => ({ ...task, id: crypto.randomUUID() }));
+
+      if (newTasks.length === 0) {
+        setCalendarImportStatus("No new Google Calendar events to add.");
+        return;
+      }
+
+      setTasks((prev) => [...newTasks, ...prev]);
+
+      const results = await Promise.all(
+        newTasks.map(async (task) => {
+          const saveResponse = await fetch("/api/items", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify(toDbPayload(task)),
+          });
+
+          return { id: task.id, ok: saveResponse.ok };
+        })
+      );
+
+      const failedIds = new Set(results.filter((result) => !result.ok).map((result) => result.id));
+      if (failedIds.size > 0) {
+        setTasks((prev) => prev.filter((task) => !failedIds.has(task.id)));
+      }
+
+      const savedCount = newTasks.length - failedIds.size;
+      if (savedCount === 0) {
+        setCalendarImportStatus("Could not save Google Calendar events. Please try again.");
+        return;
+      }
+
+      if (failedIds.size > 0) {
+        setCalendarImportStatus(`Added ${savedCount} calendar events (${failedIds.size} failed).`);
+        return;
+      }
+
+      setCalendarImportStatus(`Added ${savedCount} Google Calendar events.`);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Failed to import Google Calendar events";
+      setCalendarImportStatus(message);
+    } finally {
+      setCalendarImporting(false);
+    }
+  }
+
   const displayedTasks = sortByPriority
     ? [...tasks].sort((a, b) => b.stars - a.stars)
     : tasks;
@@ -873,6 +962,28 @@ export default function Calendar() {
           </button>
           {gmailImportStatus && (
             <p style={{ fontSize: 11, color: "#9ca3af", marginTop: 8 }}>{gmailImportStatus}</p>
+          )}
+          <button
+            onClick={importGoogleCalendarTasks}
+            disabled={calendarImporting}
+            style={{
+              marginTop: 8,
+              width: "100%",
+              padding: "8px 10px",
+              borderRadius: 8,
+              border: "1px solid rgba(56,189,248,0.35)",
+              background: calendarImporting ? "rgba(14,165,233,.24)" : "rgba(14,165,233,.16)",
+              color: "#bae6fd",
+              fontSize: 12,
+              fontWeight: 500,
+              cursor: calendarImporting ? "not-allowed" : "pointer",
+              transition: "all .15s",
+            }}
+          >
+            {calendarImporting ? "Importing Google Calendar events..." : "Import Google Calendar events"}
+          </button>
+          {calendarImportStatus && (
+            <p style={{ fontSize: 11, color: "#9ca3af", marginTop: 8 }}>{calendarImportStatus}</p>
           )}
         </div>
 
