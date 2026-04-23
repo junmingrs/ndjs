@@ -219,6 +219,71 @@ function DayColumn({ tasks, dateStr: ds }: { tasks: Task[]; dateStr: string }) {
   const nowTop = ((now.getHours() * 60 + now.getMinutes()) / 60) * CELL_HEIGHT;
   const dayTasks = tasks.filter(t => t.date === ds);
 
+  const positionedTasks = dayTasks
+    .map((task) => {
+      const startMins = task.hour * 60 + task.minute;
+      let endMins = startMins + 60;
+
+      if (task.endTimeStr) {
+        const [eh, em] = task.endTimeStr.split(":").map(Number);
+        const parsedEndMins = eh * 60 + em;
+        if (parsedEndMins > startMins) {
+          endMins = parsedEndMins;
+        }
+      }
+
+      return {
+        task,
+        startMins,
+        endMins,
+      };
+    })
+    .sort((a, b) => a.startMins - b.startMins || a.endMins - b.endMins);
+
+  const clusterLaneCount = new Map<number, number>();
+  const laidOutTasks: Array<{
+    task: Task;
+    startMins: number;
+    endMins: number;
+    lane: number;
+    clusterId: number;
+  }> = [];
+
+  let active: Array<{ endMins: number; lane: number }> = [];
+  let laneEnds: number[] = [];
+  let clusterId = -1;
+
+  for (const entry of positionedTasks) {
+    active = active.filter((item) => item.endMins > entry.startMins);
+
+    if (active.length === 0) {
+      clusterId += 1;
+      laneEnds = [];
+    }
+
+    let lane = 0;
+    while (lane < laneEnds.length && laneEnds[lane] > entry.startMins) {
+      lane += 1;
+    }
+
+    if (lane === laneEnds.length) {
+      laneEnds.push(entry.endMins);
+    } else {
+      laneEnds[lane] = entry.endMins;
+    }
+
+    active.push({ endMins: entry.endMins, lane });
+
+    laidOutTasks.push({
+      ...entry,
+      lane,
+      clusterId,
+    });
+
+    const currentMax = clusterLaneCount.get(clusterId) ?? 0;
+    clusterLaneCount.set(clusterId, Math.max(currentMax, lane + 1));
+  }
+
   return (
     <div style={{ flex: 1, borderRight: "1px solid rgba(255,255,255,.08)", position: "relative", minWidth: 0 }}>
       {/* Hour grid lines */}
@@ -227,18 +292,15 @@ function DayColumn({ tasks, dateStr: ds }: { tasks: Task[]; dateStr: string }) {
       ))}
 
       {/* Absolutely positioned event blocks spanning full duration */}
-      {dayTasks.map((t, i) => {
+      {laidOutTasks.map(({ task: t, startMins, endMins, lane, clusterId }) => {
         const c = COLOR_STYLES[t.color];
-        const startMins = t.hour * 60 + t.minute;
-        let endMins = startMins + 60; // default 1hr if no end time
-        if (t.endTimeStr) {
-          const [eh, em] = t.endTimeStr.split(":").map(Number);
-          const calc = eh * 60 + em;
-          if (calc > startMins) endMins = calc;
-        }
         const durationMins = endMins - startMins;
         const top = (startMins / 60) * CELL_HEIGHT;
         const height = Math.max((durationMins / 60) * CELL_HEIGHT, 22);
+        const laneCount = clusterLaneCount.get(clusterId) ?? 1;
+        const laneWidth = 100 / laneCount;
+        const left = laneCount === 1 ? "2px" : `calc(${laneWidth * lane}% + 2px)`;
+        const width = laneCount === 1 ? "calc(100% - 4px)" : `calc(${laneWidth}% - 4px)`;
 
         return (
           <div
@@ -246,8 +308,8 @@ function DayColumn({ tasks, dateStr: ds }: { tasks: Task[]; dateStr: string }) {
             style={{
               position: "absolute",
               top,
-              left: 2 + i * 4, // slight offset for overlapping tasks
-              right: 2,
+              left,
+              width,
               height,
               borderRadius: 4,
               padding: "4px 7px",
