@@ -11,6 +11,7 @@ type TagColor = "blue" | "rose" | "green";
 type Task = {
   id: string;
   title: string;
+  description: string;
   date: string;
   timeStr: string;
   endTimeStr: string;
@@ -60,6 +61,7 @@ type OpenAIResponse = {
 
 type TaskCandidate = {
   title: string;
+  description: string;
   timeStr: string;
   endTimeStr: string;
   stars: StarLevel;
@@ -70,41 +72,42 @@ const GMAIL_API_BASE = "https://gmail.googleapis.com/gmail/v1/users/me";
 const LIST_MAX_RESULTS = 500;
 const FETCH_CHUNK_SIZE = 20;
 
-function toDayWindow(dateParam: string | null) {
-  if (!dateParam) {
-    const now = new Date();
-    const year = now.getUTCFullYear();
-    const month = now.getUTCMonth();
-    const day = now.getUTCDate();
-    const start = Date.UTC(year, month, day, 0, 0, 0, 0);
-    const end = Date.UTC(year, month, day + 1, 0, 0, 0, 0);
+function toWindow(searchParams: URLSearchParams) {
+  const timeMinParam = searchParams.get("timeMin");
+  const timeMaxParam = searchParams.get("timeMax");
+
+  if (timeMinParam || timeMaxParam) {
+    if (!timeMinParam || !timeMaxParam) {
+      throw new Error("timeMin and timeMax must be provided together");
+    }
+
+    const start = new Date(timeMinParam);
+    const end = new Date(timeMaxParam);
+
+    if (Number.isNaN(start.getTime()) || Number.isNaN(end.getTime())) {
+      throw new Error("timeMin/timeMax must be valid ISO datetimes");
+    }
+
+    if (start >= end) {
+      throw new Error("timeMin must be earlier than timeMax");
+    }
 
     return {
-      date: new Date(start).toISOString().slice(0, 10),
-      startEpochSec: Math.floor(start / 1000),
-      endEpochSec: Math.floor(end / 1000),
+      defaultDate: start.toISOString().slice(0, 10),
+      startEpochSec: Math.floor(start.getTime() / 1000),
+      endEpochSec: Math.floor(end.getTime() / 1000),
     };
   }
 
-  if (!/^\d{4}-\d{2}-\d{2}$/.test(dateParam)) {
-    throw new Error("date must use YYYY-MM-DD format");
-  }
-
-  const [yearRaw, monthRaw, dayRaw] = dateParam.split("-");
-  const year = Number(yearRaw);
-  const month = Number(monthRaw);
-  const day = Number(dayRaw);
-
-  const start = Date.UTC(year, month - 1, day, 0, 0, 0, 0);
-  const end = Date.UTC(year, month - 1, day + 1, 0, 0, 0, 0);
-  const isoDate = new Date(start).toISOString().slice(0, 10);
-
-  if (isoDate !== dateParam) {
-    throw new Error("date is invalid");
-  }
+  const now = new Date();
+  const year = now.getUTCFullYear();
+  const month = now.getUTCMonth();
+  const day = now.getUTCDate();
+  const start = Date.UTC(year, month, day, 0, 0, 0, 0);
+  const end = Date.UTC(year, month, day + 1, 0, 0, 0, 0);
 
   return {
-    date: dateParam,
+    defaultDate: new Date(start).toISOString().slice(0, 10),
     startEpochSec: Math.floor(start / 1000),
     endEpochSec: Math.floor(end / 1000),
   };
@@ -287,7 +290,7 @@ async function fetchMessage(accessToken: string, id: string) {
 
 async function convertEmailToTask(
   email: ReturnType<typeof toMessageContext>,
-  date: string,
+  fallbackDate: string,
   instructions: string
 ) {
   const apiKey = process.env.OPENAI_API_KEY;
@@ -316,6 +319,7 @@ async function convertEmailToTask(
             additionalProperties: false,
             properties: {
               title: { type: "string", minLength: 1 },
+              description: { type: "string", minLength: 1 },
               timeStr: {
                 type: "string",
                 pattern: "^(?:[01]\\d|2[0-3]):[0-5]\\d$",
@@ -327,22 +331,22 @@ async function convertEmailToTask(
               stars: { type: "integer", enum: [1, 2, 3] },
               color: { type: "string", enum: ["blue", "rose", "green"] },
             },
-            required: ["title", "timeStr", "endTimeStr", "stars", "color"],
+            required: ["title", "description", "timeStr", "endTimeStr", "stars", "color"],
           },
         },
       },
       messages: [
         {
           role: "system",
-          content: `${instructions}\n\nAdditional hard requirements:\n- Return JSON only (schema enforced).\n- Infer a practical task title from the email.\n- If timing is unclear, use 09:00 to 10:00.\n- Use stars to estimate effort/priority (1 low, 3 high).\n- Use color from interface enum: green for task/action, rose for meeting/call, blue for generic event.`,
+            content: `${instructions}\n\nAdditional hard requirements:\n- Return JSON only (schema enforced).\n- Infer a practical task title from the email.\n- Add a concise description (1-2 lines) summarizing what needs to be done.\n- If timing is unclear, use 09:00 to 10:00.\n- Use stars to estimate effort/priority (1 low, 3 high).\n- Use color from interface enum: green for task/action, rose for meeting/call, blue for generic event.`,
         },
-        {
-          role: "user",
-          content: JSON.stringify({
-            targetDate: date,
-            email,
-          }),
-        },
+          {
+            role: "user",
+            content: JSON.stringify({
+              targetDate: fallbackDate,
+              email,
+            }),
+          },
       ],
     }),
     cache: "no-store",
@@ -363,10 +367,23 @@ async function convertEmailToTask(
 
   const [hour, minute] = parsed.timeStr.split(":").map(Number);
 
+  let taskDate = fallbackDate;
+  if (email.internalDate) {
+    const internalDateMs = Number(email.internalDate);
+    if (!Number.isNaN(internalDateMs)) {
+      const parsedDate = new Date(internalDateMs);
+      const y = parsedDate.getFullYear();
+      const m = String(parsedDate.getMonth() + 1).padStart(2, "0");
+      const d = String(parsedDate.getDate()).padStart(2, "0");
+      taskDate = `${y}-${m}-${d}`;
+    }
+  }
+
   return {
     id: email.id,
     title: parsed.title,
-    date,
+    description: parsed.description,
+    date: taskDate,
     timeStr: parsed.timeStr,
     endTimeStr: parsed.endTimeStr,
     hour,
@@ -413,13 +430,13 @@ export async function GET(request: Request) {
     }
 
     const { searchParams } = new URL(request.url);
-    const { date, startEpochSec, endEpochSec } = toDayWindow(searchParams.get("date"));
+    const { defaultDate, startEpochSec, endEpochSec } = toWindow(searchParams);
     const gmailQuery = `after:${startEpochSec} before:${endEpochSec}`;
 
     const messageIds = await listMessageIds(accessToken, gmailQuery);
     if (messageIds.length === 0) {
       return NextResponse.json({
-        date,
+        date: defaultDate,
         totalEmails: 0,
         totalTasks: 0,
         tasks: [],
@@ -436,11 +453,11 @@ export async function GET(request: Request) {
     const contexts = messages.map(toMessageContext);
 
     const tasks = await Promise.all(
-      contexts.map((email) => convertEmailToTask(email, date, instructions))
+      contexts.map((email) => convertEmailToTask(email, defaultDate, instructions))
     );
 
     return NextResponse.json({
-      date,
+      date: defaultDate,
       totalEmails: contexts.length,
       totalTasks: tasks.length,
       tasks,

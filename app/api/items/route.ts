@@ -4,6 +4,7 @@ import { createClient } from "@/lib/supabase/server";
 type ItemPayload = {
   id?: string;
   title?: string;
+  description?: string;
   dateStart?: string;
   dateEnd?: string;
   star?: number;
@@ -13,6 +14,11 @@ type ItemPayload = {
 };
 
 type ItemUpdatePayload = ItemPayload & { id: string };
+
+function shouldRetryWithoutDescription(message: string) {
+  const lower = message.toLowerCase();
+  return lower.includes("description") && lower.includes("does not exist");
+}
 
 function toIsoDate(value: string, field: string) {
   const date = new Date(value);
@@ -35,6 +41,7 @@ export async function POST(request: Request) {
     const title = body.title?.trim();
     const dateStart = body.dateStart;
     const dateEnd = body.dateEnd;
+    const description = typeof body.description === "string" ? body.description.trim() : "";
 
     if (!title || !dateStart || !dateEnd) {
       return NextResponse.json(
@@ -54,6 +61,7 @@ export async function POST(request: Request) {
     const payload = {
       ...(typeof body.id === "string" ? { id: body.id } : {}),
       title,
+      description,
       dateStart: toIsoDate(dateStart, "dateStart"),
       dateEnd: toIsoDate(dateEnd, "dateEnd"),
       star,
@@ -62,11 +70,23 @@ export async function POST(request: Request) {
       userId: authData.user.id,
     };
 
-    const { data, error } = await supabase
+    let { data, error } = await supabase
       .from("Item")
       .insert(payload)
       .select()
       .single();
+
+    if (error && shouldRetryWithoutDescription(error.message)) {
+      const fallbackPayload: Record<string, unknown> = { ...payload };
+      delete fallbackPayload.description;
+      const retryResult = await supabase
+        .from("Item")
+        .insert(fallbackPayload)
+        .select()
+        .single();
+      data = retryResult.data;
+      error = retryResult.error;
+    }
 
     if (error) {
       return NextResponse.json({ error: error.message }, { status: 500 });
@@ -131,6 +151,10 @@ export async function PUT(request: Request) {
       updates.title = title;
     }
 
+    if (typeof body.description === "string") {
+      updates.description = body.description.trim();
+    }
+
     if (typeof body.dateStart === "string") {
       updates.dateStart = toIsoDate(body.dateStart, "dateStart");
     }
@@ -162,13 +186,27 @@ export async function PUT(request: Request) {
       return NextResponse.json({ error: "No fields to update" }, { status: 400 });
     }
 
-    const { data, error } = await supabase
+    let { data, error } = await supabase
       .from("Item")
       .update(updates)
       .eq("id", id)
       .eq("userId", authData.user.id)
       .select("*")
       .single();
+
+    if (error && shouldRetryWithoutDescription(error.message) && "description" in updates) {
+      const fallbackUpdates: Record<string, unknown> = { ...updates };
+      delete fallbackUpdates.description;
+      const retryResult = await supabase
+        .from("Item")
+        .update(fallbackUpdates)
+        .eq("id", id)
+        .eq("userId", authData.user.id)
+        .select("*")
+        .single();
+      data = retryResult.data;
+      error = retryResult.error;
+    }
 
     if (error) {
       return NextResponse.json({ error: error.message }, { status: 500 });
