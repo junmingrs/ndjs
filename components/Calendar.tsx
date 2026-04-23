@@ -630,7 +630,7 @@ export default function Calendar() {
         throw new Error(data.error ?? "Failed to send email");
       }
 
-      setPopupSuccess("Email sent successfully.");
+      closeCompletionPopup();
     } catch (error) {
       const message = error instanceof Error ? error.message : "Failed to send email";
       setPopupError(message);
