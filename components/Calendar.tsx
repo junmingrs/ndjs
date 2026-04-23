@@ -33,6 +33,11 @@ type DbItem = {
   userId: string;
 };
 
+type GmailTasksResponse = {
+  tasks?: Task[];
+  error?: string;
+};
+
 // ── Constants ──────────────────────────────────────────────────────────────
 const MONTHS = [
   "January","February","March","April","May","June",
@@ -334,6 +339,8 @@ export default function Calendar() {
   // Email popup state
   const [emailPopupTask, setEmailPopupTask] = useState<Task | null>(null);
   const [itemsLoading, setItemsLoading] = useState(true);
+  const [gmailImporting, setGmailImporting] = useState(false);
+  const [gmailImportStatus, setGmailImportStatus] = useState<string | null>(null);
 
   const weekScrollRef = useRef<HTMLDivElement>(null);
   const dayScrollRef  = useRef<HTMLDivElement>(null);
@@ -510,6 +517,74 @@ export default function Calendar() {
     const supabase = createClient();
     await supabase.auth.signOut();
     window.location.href = "/";
+  async function importGmailTasks() {
+    if (gmailImporting) {
+      return;
+    }
+
+    setGmailImporting(true);
+    setGmailImportStatus(null);
+
+    try {
+      const response = await fetch("/api/gmail/today/tasks", {
+        method: "GET",
+        cache: "no-store",
+      });
+
+      const data = (await response.json()) as GmailTasksResponse;
+
+      if (!response.ok) {
+        throw new Error(data.error ?? "Failed to import tasks from Gmail");
+      }
+
+      const importedTasks = data.tasks ?? [];
+      const existingIds = new Set(tasks.map((task) => task.id));
+      const newTasks = importedTasks
+        .filter((task) => !existingIds.has(task.id))
+        .map((task) => ({ ...task, source: "gmail" as const }));
+
+      if (newTasks.length === 0) {
+        setGmailImportStatus("No new Gmail events to add.");
+        return;
+      }
+
+      setTasks((prev) => [...newTasks, ...prev]);
+
+      const results = await Promise.all(
+        newTasks.map(async (task) => {
+          const saveResponse = await fetch("/api/items", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify(toDbPayload(task)),
+          });
+
+          return { id: task.id, ok: saveResponse.ok };
+        })
+      );
+
+      const failedIds = new Set(results.filter((result) => !result.ok).map((result) => result.id));
+      if (failedIds.size > 0) {
+        setTasks((prev) => prev.filter((task) => !failedIds.has(task.id)));
+      }
+
+      const savedCount = newTasks.length - failedIds.size;
+      if (savedCount === 0) {
+        setGmailImportStatus("Could not save Gmail events. Please try again.");
+        return;
+      }
+
+      if (failedIds.size > 0) {
+        setGmailImportStatus(`Added ${savedCount} Gmail events (${failedIds.size} failed).`);
+        return;
+      }
+
+      setGmailImportStatus(`Added ${savedCount} Gmail events.`);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Failed to import tasks from Gmail";
+      setGmailImportStatus(message);
+    } finally {
+      setGmailImporting(false);
+    }
   }
 
   const displayedTasks = sortByPriority
@@ -626,6 +701,28 @@ export default function Calendar() {
             </h2>
           </div>
           <p style={{ fontSize: 11, color: "#6b7280" }}>Add tasks directly to your calendar</p>
+          <button
+            onClick={importGmailTasks}
+            disabled={gmailImporting}
+            style={{
+              marginTop: 10,
+              width: "100%",
+              padding: "8px 10px",
+              borderRadius: 8,
+              border: "1px solid rgba(165,180,252,0.35)",
+              background: gmailImporting ? "rgba(99,102,241,.25)" : "rgba(99,102,241,.18)",
+              color: "#c7d2fe",
+              fontSize: 12,
+              fontWeight: 500,
+              cursor: gmailImporting ? "not-allowed" : "pointer",
+              transition: "all .15s",
+            }}
+          >
+            {gmailImporting ? "Importing Gmail events..." : "Import Gmail events with AI"}
+          </button>
+          {gmailImportStatus && (
+            <p style={{ fontSize: 11, color: "#9ca3af", marginTop: 8 }}>{gmailImportStatus}</p>
+          )}
         </div>
 
         {/* Form */}

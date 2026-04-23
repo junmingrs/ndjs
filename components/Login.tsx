@@ -23,6 +23,11 @@ export function LoginForm({ onClose }: LoginFormProps) {
         provider: "google",
         options: {
           redirectTo,
+          scopes: "https://www.googleapis.com/auth/gmail.readonly",
+          queryParams: {
+            access_type: "offline",
+            prompt: "consent",
+          },
         },
       });
 
