@@ -39,6 +39,11 @@ type GmailTasksResponse = {
   error?: string;
 };
 
+type CalendarTasksResponse = {
+  tasks?: Task[];
+  error?: string;
+};
+
 type FormattedDraft = {
   recipient: string;
   subject: string;
@@ -214,6 +219,71 @@ function DayColumn({ tasks, dateStr: ds }: { tasks: Task[]; dateStr: string }) {
   const nowTop = ((now.getHours() * 60 + now.getMinutes()) / 60) * CELL_HEIGHT;
   const dayTasks = tasks.filter(t => t.date === ds);
 
+  const positionedTasks = dayTasks
+    .map((task) => {
+      const startMins = task.hour * 60 + task.minute;
+      let endMins = startMins + 60;
+
+      if (task.endTimeStr) {
+        const [eh, em] = task.endTimeStr.split(":").map(Number);
+        const parsedEndMins = eh * 60 + em;
+        if (parsedEndMins > startMins) {
+          endMins = parsedEndMins;
+        }
+      }
+
+      return {
+        task,
+        startMins,
+        endMins,
+      };
+    })
+    .sort((a, b) => a.startMins - b.startMins || a.endMins - b.endMins);
+
+  const clusterLaneCount = new Map<number, number>();
+  const laidOutTasks: Array<{
+    task: Task;
+    startMins: number;
+    endMins: number;
+    lane: number;
+    clusterId: number;
+  }> = [];
+
+  let active: Array<{ endMins: number; lane: number }> = [];
+  let laneEnds: number[] = [];
+  let clusterId = -1;
+
+  for (const entry of positionedTasks) {
+    active = active.filter((item) => item.endMins > entry.startMins);
+
+    if (active.length === 0) {
+      clusterId += 1;
+      laneEnds = [];
+    }
+
+    let lane = 0;
+    while (lane < laneEnds.length && laneEnds[lane] > entry.startMins) {
+      lane += 1;
+    }
+
+    if (lane === laneEnds.length) {
+      laneEnds.push(entry.endMins);
+    } else {
+      laneEnds[lane] = entry.endMins;
+    }
+
+    active.push({ endMins: entry.endMins, lane });
+
+    laidOutTasks.push({
+      ...entry,
+      lane,
+      clusterId,
+    });
+
+    const currentMax = clusterLaneCount.get(clusterId) ?? 0;
+    clusterLaneCount.set(clusterId, Math.max(currentMax, lane + 1));
+  }
+
   return (
     <div style={{ flex: 1, borderRight: "1px solid rgba(255,255,255,.08)", position: "relative", minWidth: 0 }}>
       {/* Hour grid lines */}
@@ -222,18 +292,15 @@ function DayColumn({ tasks, dateStr: ds }: { tasks: Task[]; dateStr: string }) {
       ))}
 
       {/* Absolutely positioned event blocks spanning full duration */}
-      {dayTasks.map((t, i) => {
+      {laidOutTasks.map(({ task: t, startMins, endMins, lane, clusterId }) => {
         const c = COLOR_STYLES[t.color];
-        const startMins = t.hour * 60 + t.minute;
-        let endMins = startMins + 60; // default 1hr if no end time
-        if (t.endTimeStr) {
-          const [eh, em] = t.endTimeStr.split(":").map(Number);
-          const calc = eh * 60 + em;
-          if (calc > startMins) endMins = calc;
-        }
         const durationMins = endMins - startMins;
         const top = (startMins / 60) * CELL_HEIGHT;
         const height = Math.max((durationMins / 60) * CELL_HEIGHT, 22);
+        const laneCount = clusterLaneCount.get(clusterId) ?? 1;
+        const laneWidth = 100 / laneCount;
+        const left = laneCount === 1 ? "2px" : `calc(${laneWidth * lane}% + 2px)`;
+        const width = laneCount === 1 ? "calc(100% - 4px)" : `calc(${laneWidth}% - 4px)`;
 
         return (
           <div
@@ -241,8 +308,8 @@ function DayColumn({ tasks, dateStr: ds }: { tasks: Task[]; dateStr: string }) {
             style={{
               position: "absolute",
               top,
-              left: 2 + i * 4, // slight offset for overlapping tasks
-              right: 2,
+              left,
+              width,
               height,
               borderRadius: 4,
               padding: "4px 7px",
@@ -349,6 +416,8 @@ export default function Calendar() {
   const [itemsLoading, setItemsLoading] = useState(true);
   const [gmailImporting, setGmailImporting] = useState(false);
   const [gmailImportStatus, setGmailImportStatus] = useState<string | null>(null);
+  const [calendarImporting, setCalendarImporting] = useState(false);
+  const [calendarImportStatus, setCalendarImportStatus] = useState<string | null>(null);
   const [gmailTaskIds, setGmailTaskIds] = useState<Set<string>>(new Set());
 
   // Gmail completion popup state
@@ -738,6 +807,101 @@ export default function Calendar() {
     }
   }
 
+  async function importGoogleCalendarTasks() {
+    if (calendarImporting) {
+      return;
+    }
+
+    setCalendarImporting(true);
+    setCalendarImportStatus(null);
+
+    try {
+      const base = new Date(viewYear, viewMonth, viewDay);
+      const startOfWeek = new Date(base);
+      startOfWeek.setDate(base.getDate() - base.getDay());
+      startOfWeek.setHours(0, 0, 0, 0);
+
+      const endOfWeek = new Date(startOfWeek);
+      endOfWeek.setDate(startOfWeek.getDate() + 7);
+
+      const params = new URLSearchParams({
+        timeMin: startOfWeek.toISOString(),
+        timeMax: endOfWeek.toISOString(),
+      });
+
+      const response = await fetch(`/api/google-calendar/today?${params.toString()}`, {
+        method: "GET",
+        cache: "no-store",
+      });
+
+      const data = (await response.json()) as CalendarTasksResponse;
+
+      if (!response.ok) {
+        throw new Error(data.error ?? "Failed to import Google Calendar events");
+      }
+
+      const importedTasks = data.tasks ?? [];
+      const toSignature = (task: Pick<Task, "title" | "date" | "timeStr" | "endTimeStr">) =>
+        `${task.date}|${task.timeStr}|${task.endTimeStr}|${task.title.trim().toLowerCase()}`;
+
+      const existingSignatures = new Set(tasks.map((task) => toSignature(task)));
+      const seenImportSignatures = new Set<string>();
+
+      const newTasks = importedTasks
+        .filter((task) => {
+          const signature = toSignature(task);
+          if (existingSignatures.has(signature) || seenImportSignatures.has(signature)) {
+            return false;
+          }
+          seenImportSignatures.add(signature);
+          return true;
+        })
+        .map((task) => ({ ...task, id: crypto.randomUUID() }));
+
+      if (newTasks.length === 0) {
+        setCalendarImportStatus("No new Google Calendar events found for this week.");
+        return;
+      }
+
+      setTasks((prev) => [...newTasks, ...prev]);
+
+      const results = await Promise.all(
+        newTasks.map(async (task) => {
+          const saveResponse = await fetch("/api/items", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify(toDbPayload(task)),
+          });
+
+          return { id: task.id, ok: saveResponse.ok };
+        })
+      );
+
+      const failedIds = new Set(results.filter((result) => !result.ok).map((result) => result.id));
+      if (failedIds.size > 0) {
+        setTasks((prev) => prev.filter((task) => !failedIds.has(task.id)));
+      }
+
+      const savedCount = newTasks.length - failedIds.size;
+      if (savedCount === 0) {
+        setCalendarImportStatus("Could not save Google Calendar events. Please try again.");
+        return;
+      }
+
+      if (failedIds.size > 0) {
+        setCalendarImportStatus(`Added ${savedCount} calendar events (${failedIds.size} failed).`);
+        return;
+      }
+
+      setCalendarImportStatus(`Added ${savedCount} Google Calendar events for this week.`);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Failed to import Google Calendar events";
+      setCalendarImportStatus(message);
+    } finally {
+      setCalendarImporting(false);
+    }
+  }
+
   const displayedTasks = sortByPriority
     ? [...tasks].sort((a, b) => b.stars - a.stars)
     : tasks;
@@ -873,6 +1037,28 @@ export default function Calendar() {
           </button>
           {gmailImportStatus && (
             <p style={{ fontSize: 11, color: "#9ca3af", marginTop: 8 }}>{gmailImportStatus}</p>
+          )}
+          <button
+            onClick={importGoogleCalendarTasks}
+            disabled={calendarImporting}
+            style={{
+              marginTop: 8,
+              width: "100%",
+              padding: "8px 10px",
+              borderRadius: 8,
+              border: "1px solid rgba(56,189,248,0.35)",
+              background: calendarImporting ? "rgba(14,165,233,.24)" : "rgba(14,165,233,.16)",
+              color: "#bae6fd",
+              fontSize: 12,
+              fontWeight: 500,
+              cursor: calendarImporting ? "not-allowed" : "pointer",
+              transition: "all .15s",
+            }}
+          >
+            {calendarImporting ? "Importing Google Calendar events..." : "Import Google Calendar events"}
+          </button>
+          {calendarImportStatus && (
+            <p style={{ fontSize: 11, color: "#9ca3af", marginTop: 8 }}>{calendarImportStatus}</p>
           )}
         </div>
 
