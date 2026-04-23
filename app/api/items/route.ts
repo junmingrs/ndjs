@@ -15,6 +15,11 @@ type ItemPayload = {
 
 type ItemUpdatePayload = ItemPayload & { id: string };
 
+function shouldRetryWithoutDescription(message: string) {
+  const lower = message.toLowerCase();
+  return lower.includes("description") && lower.includes("does not exist");
+}
+
 function toIsoDate(value: string, field: string) {
   const date = new Date(value);
   if (Number.isNaN(date.getTime())) {
@@ -65,11 +70,23 @@ export async function POST(request: Request) {
       userId: authData.user.id,
     };
 
-    const { data, error } = await supabase
+    let { data, error } = await supabase
       .from("Item")
       .insert(payload)
       .select()
       .single();
+
+    if (error && shouldRetryWithoutDescription(error.message)) {
+      const fallbackPayload: Record<string, unknown> = { ...payload };
+      delete fallbackPayload.description;
+      const retryResult = await supabase
+        .from("Item")
+        .insert(fallbackPayload)
+        .select()
+        .single();
+      data = retryResult.data;
+      error = retryResult.error;
+    }
 
     if (error) {
       return NextResponse.json({ error: error.message }, { status: 500 });
@@ -169,13 +186,27 @@ export async function PUT(request: Request) {
       return NextResponse.json({ error: "No fields to update" }, { status: 400 });
     }
 
-    const { data, error } = await supabase
+    let { data, error } = await supabase
       .from("Item")
       .update(updates)
       .eq("id", id)
       .eq("userId", authData.user.id)
       .select("*")
       .single();
+
+    if (error && shouldRetryWithoutDescription(error.message) && "description" in updates) {
+      const fallbackUpdates: Record<string, unknown> = { ...updates };
+      delete fallbackUpdates.description;
+      const retryResult = await supabase
+        .from("Item")
+        .update(fallbackUpdates)
+        .eq("id", id)
+        .eq("userId", authData.user.id)
+        .select("*")
+        .single();
+      data = retryResult.data;
+      error = retryResult.error;
+    }
 
     if (error) {
       return NextResponse.json({ error: error.message }, { status: 500 });
