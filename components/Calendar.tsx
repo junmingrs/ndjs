@@ -517,6 +517,8 @@ export default function Calendar() {
     const supabase = createClient();
     await supabase.auth.signOut();
     window.location.href = "/";
+  }
+
   async function importGmailTasks() {
     if (gmailImporting) {
       return;
@@ -538,10 +540,22 @@ export default function Calendar() {
       }
 
       const importedTasks = data.tasks ?? [];
-      const existingIds = new Set(tasks.map((task) => task.id));
+      const toSignature = (task: Pick<Task, "title" | "date" | "timeStr" | "endTimeStr">) =>
+        `${task.date}|${task.timeStr}|${task.endTimeStr}|${task.title.trim().toLowerCase()}`;
+
+      const existingSignatures = new Set(tasks.map((task) => toSignature(task)));
+      const seenImportSignatures = new Set<string>();
+
       const newTasks = importedTasks
-        .filter((task) => !existingIds.has(task.id))
-        .map((task) => ({ ...task, source: "gmail" as const }));
+        .filter((task) => {
+          const signature = toSignature(task);
+          if (existingSignatures.has(signature) || seenImportSignatures.has(signature)) {
+            return false;
+          }
+          seenImportSignatures.add(signature);
+          return true;
+        })
+        .map((task) => ({ ...task, id: crypto.randomUUID(), source: "gmail" as const }));
 
       if (newTasks.length === 0) {
         setGmailImportStatus("No new Gmail events to add.");
