@@ -5,6 +5,7 @@ import { createClient } from "@/lib/supabase/server";
 type CalendarEventItem = {
   id?: string;
   summary?: string;
+  description?: string;
   start?: {
     dateTime?: string;
     date?: string;
@@ -25,6 +26,7 @@ type CalendarEventsResponse = {
 type CalendarTask = {
   id: string;
   title: string;
+  description: string;
   date: string;
   timeStr: string;
   endTimeStr: string;
@@ -120,6 +122,7 @@ function toTask(event: CalendarEventItem): CalendarTask | null {
   return {
     id: event.id ?? crypto.randomUUID(),
     title,
+    description: event.description?.trim() ?? "",
     date: toDateStr(start),
     timeStr: toTimeStr(start),
     endTimeStr: toTimeStr(end),

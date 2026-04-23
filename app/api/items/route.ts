@@ -4,6 +4,7 @@ import { createClient } from "@/lib/supabase/server";
 type ItemPayload = {
   id?: string;
   title?: string;
+  description?: string;
   dateStart?: string;
   dateEnd?: string;
   star?: number;
@@ -35,6 +36,7 @@ export async function POST(request: Request) {
     const title = body.title?.trim();
     const dateStart = body.dateStart;
     const dateEnd = body.dateEnd;
+    const description = typeof body.description === "string" ? body.description.trim() : "";
 
     if (!title || !dateStart || !dateEnd) {
       return NextResponse.json(
@@ -54,6 +56,7 @@ export async function POST(request: Request) {
     const payload = {
       ...(typeof body.id === "string" ? { id: body.id } : {}),
       title,
+      description,
       dateStart: toIsoDate(dateStart, "dateStart"),
       dateEnd: toIsoDate(dateEnd, "dateEnd"),
       star,
@@ -129,6 +132,10 @@ export async function PUT(request: Request) {
         return NextResponse.json({ error: "title cannot be empty" }, { status: 400 });
       }
       updates.title = title;
+    }
+
+    if (typeof body.description === "string") {
+      updates.description = body.description.trim();
     }
 
     if (typeof body.dateStart === "string") {

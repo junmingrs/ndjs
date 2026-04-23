@@ -11,6 +11,7 @@ type ViewMode = "month" | "week" | "day";
 interface Task {
   id: string;
   title: string;
+  description: string;
   date: string;        // "YYYY-MM-DD"
   timeStr: string;     // "HH:MM" start
   endTimeStr: string;  // "HH:MM" end
@@ -25,6 +26,7 @@ interface Task {
 type DbItem = {
   id: string;
   title: string;
+  description?: string;
   dateStart: string;
   dateEnd: string;
   star: number;
@@ -110,6 +112,7 @@ function fromDbItem(item: DbItem): Task {
   return {
     id: item.id,
     title: item.title,
+    description: item.description ?? "",
     date,
     timeStr,
     endTimeStr,
@@ -130,6 +133,7 @@ function toDbPayload(task: Task) {
   return {
     id: task.id,
     title: task.title,
+    description: task.description,
     dateStart: dateStart.toISOString(),
     dateEnd: dateEnd.toISOString(),
     star: task.stars,
@@ -177,10 +181,11 @@ function SortIcon() {
 }
 
 // ── Chip (month-view event pill) ──────────────────────────────────────────
-function Chip({ task }: { task: Task }) {
+function Chip({ task, onDoubleClick }: { task: Task; onDoubleClick?: (task: Task) => void }) {
   const c = COLOR_STYLES[task.color];
   return (
     <div
+      onDoubleClick={() => onDoubleClick?.(task)}
       style={{
         background: task.done ? "rgba(255,255,255,.04)" : c.bg,
         borderColor: task.done ? "rgba(255,255,255,.12)" : c.border,
@@ -197,6 +202,7 @@ function Chip({ task }: { task: Task }) {
         whiteSpace: "nowrap",
         overflow: "hidden",
         opacity: task.done ? 0.55 : 1,
+        cursor: "pointer",
       }}
     >
       <div style={{ width: 6, height: 6, borderRadius: "50%", background: task.done ? "rgba(255,255,255,.2)" : c.dot, flexShrink: 0 }} />
@@ -213,7 +219,15 @@ function Chip({ task }: { task: Task }) {
 // ── Time-view day column ──────────────────────────────────────────────────
 const CELL_HEIGHT = 48; // px per hour
 
-function DayColumn({ tasks, dateStr: ds }: { tasks: Task[]; dateStr: string }) {
+function DayColumn({
+  tasks,
+  dateStr: ds,
+  onTaskDoubleClick,
+}: {
+  tasks: Task[];
+  dateStr: string;
+  onTaskDoubleClick?: (task: Task) => void;
+}) {
   const now = new Date();
   const isToday = ds === todayStr();
   const nowTop = ((now.getHours() * 60 + now.getMinutes()) / 60) * CELL_HEIGHT;
@@ -305,6 +319,7 @@ function DayColumn({ tasks, dateStr: ds }: { tasks: Task[]; dateStr: string }) {
         return (
           <div
             key={t.id}
+            onDoubleClick={() => onTaskDoubleClick?.(t)}
             style={{
               position: "absolute",
               top,
@@ -324,11 +339,24 @@ function DayColumn({ tasks, dateStr: ds }: { tasks: Task[]; dateStr: string }) {
               opacity: t.done ? 0.55 : 1,
               zIndex: 2,
               boxSizing: "border-box",
+              cursor: "pointer",
             }}
           >
             <div style={{ whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis", color: t.done ? "rgba(255,255,255,.4)" : "rgba(255,255,255,.9)", textDecoration: t.done ? "line-through" : "none" }}>
               {t.title}
             </div>
+            {height > 56 && t.description && (
+              <div style={{
+                marginTop: 2,
+                fontSize: 10,
+                color: t.done ? "rgba(255,255,255,.25)" : "rgba(229,231,235,.75)",
+                overflow: "hidden",
+                textOverflow: "ellipsis",
+                whiteSpace: "nowrap",
+              }}>
+                {t.description}
+              </div>
+            )}
             {height > 28 && (
               <div style={{ fontSize: 10, color: t.done ? "rgba(255,255,255,.25)" : "rgba(255,255,255,.55)", marginTop: 1, textDecoration: t.done ? "line-through" : "none" }}>
                 {fmt12(t.timeStr)}{t.endTimeStr ? ` – ${fmt12(t.endTimeStr)}` : ""}
@@ -399,6 +427,7 @@ export default function Calendar() {
   const [sortByPriority, setSortByPriority] = useState(false);
   const [editingId, setEditingId] = useState<string | null>(null);
   const [editTitle, setEditTitle] = useState("");
+  const [editDescription, setEditDescription] = useState("");
   const [editDate,  setEditDate]  = useState("");
   const [editTime,  setEditTime]  = useState("");
   const [editEndTime, setEditEndTime] = useState("");
@@ -407,6 +436,7 @@ export default function Calendar() {
 
   // Form state
   const [taskTitle, setTaskTitle] = useState("");
+  const [taskDescription, setTaskDescription] = useState("");
   const [taskDate,  setTaskDate]  = useState(todayStr());
   const [taskTime,  setTaskTime]  = useState("09:00");
   const [taskEndTime, setTaskEndTime] = useState("10:00");
@@ -430,6 +460,16 @@ export default function Calendar() {
   const [sendingEmail, setSendingEmail] = useState(false);
   const [popupError, setPopupError] = useState<string | null>(null);
   const [popupSuccess, setPopupSuccess] = useState<string | null>(null);
+
+  // Calendar-item popup edit state (double-click on calendar blocks)
+  const [calendarEditTaskId, setCalendarEditTaskId] = useState<string | null>(null);
+  const [calendarEditTitle, setCalendarEditTitle] = useState("");
+  const [calendarEditDescription, setCalendarEditDescription] = useState("");
+  const [calendarEditDate, setCalendarEditDate] = useState("");
+  const [calendarEditTime, setCalendarEditTime] = useState("");
+  const [calendarEditEndTime, setCalendarEditEndTime] = useState("");
+  const [calendarEditStars, setCalendarEditStars] = useState<StarLevel>(1);
+  const [calendarEditColor, setCalendarEditColor] = useState<TagColor>("blue");
 
   const weekScrollRef = useRef<HTMLDivElement>(null);
   const dayScrollRef  = useRef<HTMLDivElement>(null);
@@ -490,6 +530,7 @@ export default function Calendar() {
     const newTask: Task = {
       id: crypto.randomUUID(),
       title: taskTitle.trim(),
+      description: taskDescription.trim(),
       date: taskDate,
       timeStr: taskTime,
       endTimeStr: taskEndTime,
@@ -517,6 +558,7 @@ export default function Calendar() {
     }
 
     setTaskTitle("");
+    setTaskDescription("");
   }
 
   async function deleteTask(id: string) {
@@ -539,6 +581,7 @@ export default function Calendar() {
   function startEdit(t: Task) {
     setEditingId(t.id);
     setEditTitle(t.title);
+    setEditDescription(t.description ?? "");
     setEditDate(t.date);
     setEditTime(t.timeStr);
     setEditEndTime(t.endTimeStr);
@@ -551,7 +594,7 @@ export default function Calendar() {
     const [hour, minute] = editTime.split(":").map(Number);
     const updatedTasks = tasks.map(t =>
       t.id === editingId
-        ? { ...t, title: editTitle.trim(), date: editDate, timeStr: editTime, endTimeStr: editEndTime, hour, minute, stars: editStars, color: editColor, done: t.done }
+        ? { ...t, title: editTitle.trim(), description: editDescription.trim(), date: editDate, timeStr: editTime, endTimeStr: editEndTime, hour, minute, stars: editStars, color: editColor, done: t.done }
         : t
     );
     setTasks(updatedTasks);
@@ -577,6 +620,68 @@ export default function Calendar() {
   }
 
   function cancelEdit() { setEditingId(null); }
+
+  function openCalendarItemEdit(task: Task) {
+    setCalendarEditTaskId(task.id);
+    setCalendarEditTitle(task.title);
+    setCalendarEditDescription(task.description ?? "");
+    setCalendarEditDate(task.date);
+    setCalendarEditTime(task.timeStr);
+    setCalendarEditEndTime(task.endTimeStr);
+    setCalendarEditStars(task.stars);
+    setCalendarEditColor(task.color);
+  }
+
+  function closeCalendarItemEdit() {
+    setCalendarEditTaskId(null);
+  }
+
+  async function saveCalendarItemEdit() {
+    if (!calendarEditTaskId || !calendarEditTitle.trim()) {
+      return;
+    }
+
+    const [hour, minute] = calendarEditTime.split(":").map(Number);
+    const updatedTasks = tasks.map((task) =>
+      task.id === calendarEditTaskId
+        ? {
+            ...task,
+            title: calendarEditTitle.trim(),
+            description: calendarEditDescription.trim(),
+            date: calendarEditDate,
+            timeStr: calendarEditTime,
+            endTimeStr: calendarEditEndTime,
+            hour,
+            minute,
+            stars: calendarEditStars,
+            color: calendarEditColor,
+          }
+        : task
+    );
+
+    setTasks(updatedTasks);
+
+    const updated = updatedTasks.find((task) => task.id === calendarEditTaskId);
+    if (updated) {
+      try {
+        const response = await fetch("/api/items", {
+          method: "PUT",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(toDbPayload(updated)),
+        });
+
+        if (!response.ok) {
+          setTasks(tasks);
+          return;
+        }
+      } catch {
+        setTasks(tasks);
+        return;
+      }
+    }
+
+    closeCalendarItemEdit();
+  }
 
   async function toggleDone(id: string) {
     const existing = tasks.find(t => t.id === id);
@@ -723,7 +828,20 @@ export default function Calendar() {
     setGmailImportStatus(null);
 
     try {
-      const response = await fetch("/api/gmail/today/tasks", {
+      const base = new Date(viewYear, viewMonth, viewDay);
+      const startOfWeek = new Date(base);
+      startOfWeek.setDate(base.getDate() - base.getDay());
+      startOfWeek.setHours(0, 0, 0, 0);
+
+      const endOfWeek = new Date(startOfWeek);
+      endOfWeek.setDate(startOfWeek.getDate() + 7);
+
+      const params = new URLSearchParams({
+        timeMin: startOfWeek.toISOString(),
+        timeMax: endOfWeek.toISOString(),
+      });
+
+      const response = await fetch(`/api/gmail/today/tasks?${params.toString()}`, {
         method: "GET",
         cache: "no-store",
       });
@@ -753,7 +871,7 @@ export default function Calendar() {
         .map((task) => ({ ...task, id: crypto.randomUUID() }));
 
       if (newTasks.length === 0) {
-        setGmailImportStatus("No new Gmail events to add.");
+        setGmailImportStatus("No new Gmail events found for this week.");
         return;
       }
 
@@ -798,7 +916,7 @@ export default function Calendar() {
         return;
       }
 
-      setGmailImportStatus(`Added ${savedCount} Gmail events.`);
+      setGmailImportStatus(`Added ${savedCount} Gmail events for this week.`);
     } catch (error) {
       const message = error instanceof Error ? error.message : "Failed to import tasks from Gmail";
       setGmailImportStatus(message);
@@ -1071,6 +1189,12 @@ export default function Calendar() {
             onKeyDown={e => e.key === "Enter" && addTask()}
             placeholder="Task title..."
           />
+          <textarea
+            style={{ ...S.input, minHeight: 74, resize: "vertical", paddingTop: 8 }}
+            value={taskDescription}
+            onChange={e => setTaskDescription(e.target.value)}
+            placeholder="Task description..."
+          />
           <div style={{ display: "flex", gap: 8 }}>
             <div style={{ flex: 1, minWidth: 0 }}>
               <label style={S.label}>Date</label>
@@ -1173,6 +1297,12 @@ export default function Calendar() {
                     autoFocus
                     style={{ width: "100%", background: "rgba(255,255,255,.08)", border: "1px solid rgba(255,255,255,.2)", borderRadius: 6, padding: "6px 10px", fontSize: 12, color: "#e5e7eb", outline: "none", colorScheme: "dark" as const }}
                   />
+                  <textarea
+                    value={editDescription}
+                    onChange={e => setEditDescription(e.target.value)}
+                    placeholder="Task description"
+                    style={{ width: "100%", minHeight: 72, background: "rgba(255,255,255,.08)", border: "1px solid rgba(255,255,255,.2)", borderRadius: 6, padding: "7px 10px", fontSize: 12, color: "#e5e7eb", outline: "none", resize: "vertical" }}
+                  />
                   <div style={{ display: "flex", gap: 6 }}>
                     <input type="date" value={editDate} onChange={e => setEditDate(e.target.value)}
                       style={{ flex: 1, background: "rgba(255,255,255,.08)", border: "1px solid rgba(255,255,255,.15)", borderRadius: 6, padding: "5px 8px", fontSize: 11, color: "#e5e7eb", outline: "none", colorScheme: "dark" as const }} />
@@ -1254,6 +1384,21 @@ export default function Calendar() {
                     }}>
                       {t.title}
                     </div>
+                    {t.description && (
+                      <div style={{
+                        marginTop: 3,
+                        fontSize: 11,
+                        color: t.done && t.color === "green" ? "#6b7280" : "#cbd5e1",
+                        overflow: "hidden",
+                        textOverflow: "ellipsis",
+                        display: "-webkit-box",
+                        WebkitLineClamp: 2,
+                        WebkitBoxOrient: "vertical",
+                        textDecoration: t.done && t.color === "green" ? "line-through" : "none",
+                      }}>
+                        {t.description}
+                      </div>
+                    )}
                     <div style={{ display: "flex", alignItems: "center", gap: 6, marginTop: 2 }}>
                       <span style={{ fontSize: 10, color: "#6b7280" }}>{t.date}</span>
                       {t.timeStr && <span style={{ marginLeft: "auto", fontSize: 10, color: "#9ca3af" }}>{fmt12(t.timeStr)}{t.endTimeStr ? ` – ${fmt12(t.endTimeStr)}` : ""}</span>}
@@ -1407,7 +1552,9 @@ export default function Calendar() {
                     }}>
                       {cell.d}
                     </div>
-                    {cellTasks.slice(0, 3).map(t => <Chip key={t.id} task={t} />)}
+                    {cellTasks.slice(0, 3).map(t => (
+                      <Chip key={t.id} task={t} onDoubleClick={openCalendarItemEdit} />
+                    ))}
                     {cellTasks.length > 3 && (
                       <span style={{ fontSize: 9, color: "#6b7280", padding: "1px 4px" }}>+{cellTasks.length - 3} more</span>
                     )}
@@ -1454,7 +1601,12 @@ export default function Calendar() {
               <TimeLabels />
               <div style={{ flex: 1, display: "flex", minWidth: 0 }}>
                 {weekDays.map(({ ds }, i) => (
-                  <DayColumn key={i} tasks={tasks} dateStr={ds} />
+                  <DayColumn
+                    key={i}
+                    tasks={tasks}
+                    dateStr={ds}
+                    onTaskDoubleClick={openCalendarItemEdit}
+                  />
                 ))}
               </div>
             </div>
@@ -1491,12 +1643,142 @@ export default function Calendar() {
             <div ref={dayScrollRef} style={{ flex: 1, overflowY: "auto", display: "flex", minHeight: 0 }}>
               <TimeLabels />
               <div style={{ flex: 1, display: "flex", minWidth: 0 }}>
-                <DayColumn tasks={tasks} dateStr={currentDayStr} />
+                <DayColumn
+                  tasks={tasks}
+                  dateStr={currentDayStr}
+                  onTaskDoubleClick={openCalendarItemEdit}
+                />
               </div>
             </div>
           </div>
         )}
       </main>
+
+      {calendarEditTaskId && (
+        <div
+          style={{
+            position: "fixed",
+            inset: 0,
+            background: "rgba(10, 12, 20, 0.5)",
+            backdropFilter: "blur(3px)",
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center",
+            padding: 20,
+            zIndex: 1250,
+          }}
+        >
+          <div
+            style={{
+              width: "min(560px, 100%)",
+              background: "#1f2437",
+              border: "1px solid rgba(255,255,255,.14)",
+              borderRadius: 12,
+              padding: 16,
+              boxShadow: "0 20px 40px rgba(0,0,0,.5)",
+              color: "#e5e7eb",
+              display: "flex",
+              flexDirection: "column",
+              gap: 8,
+            }}
+          >
+            <div style={{ fontSize: 13, fontWeight: 600, color: "#c7d2fe", marginBottom: 2 }}>
+              Edit calendar item
+            </div>
+            <input
+              value={calendarEditTitle}
+              onChange={(e) => setCalendarEditTitle(e.target.value)}
+              placeholder="Task title"
+              style={{ width: "100%", background: "rgba(255,255,255,.08)", border: "1px solid rgba(255,255,255,.2)", borderRadius: 6, padding: "8px 10px", fontSize: 12, color: "#e5e7eb", outline: "none" }}
+            />
+            <textarea
+              value={calendarEditDescription}
+              onChange={(e) => setCalendarEditDescription(e.target.value)}
+              placeholder="Task description"
+              style={{ width: "100%", minHeight: 80, background: "rgba(255,255,255,.08)", border: "1px solid rgba(255,255,255,.2)", borderRadius: 6, padding: "8px 10px", fontSize: 12, color: "#e5e7eb", outline: "none", resize: "vertical" }}
+            />
+            <div style={{ display: "flex", gap: 8 }}>
+              <input
+                type="date"
+                value={calendarEditDate}
+                onChange={(e) => setCalendarEditDate(e.target.value)}
+                style={{ flex: 1, background: "rgba(255,255,255,.08)", border: "1px solid rgba(255,255,255,.2)", borderRadius: 6, padding: "7px 8px", fontSize: 12, color: "#e5e7eb", outline: "none", colorScheme: "dark" as const }}
+              />
+              <input
+                type="time"
+                value={calendarEditTime}
+                onChange={(e) => setCalendarEditTime(e.target.value)}
+                style={{ flex: 1, background: "rgba(255,255,255,.08)", border: "1px solid rgba(255,255,255,.2)", borderRadius: 6, padding: "7px 8px", fontSize: 12, color: "#e5e7eb", outline: "none", colorScheme: "dark" as const }}
+              />
+              <input
+                type="time"
+                value={calendarEditEndTime}
+                onChange={(e) => setCalendarEditEndTime(e.target.value)}
+                style={{ flex: 1, background: "rgba(255,255,255,.08)", border: "1px solid rgba(255,255,255,.2)", borderRadius: 6, padding: "7px 8px", fontSize: 12, color: "#e5e7eb", outline: "none", colorScheme: "dark" as const }}
+              />
+            </div>
+            <div style={{ display: "flex", gap: 6 }}>
+              {([1, 2, 3] as StarLevel[]).map((lvl) => (
+                <button
+                  key={lvl}
+                  onClick={() => setCalendarEditStars(lvl)}
+                  style={{
+                    flex: 1,
+                    padding: "6px 0",
+                    borderRadius: 6,
+                    cursor: "pointer",
+                    fontSize: 11,
+                    border: calendarEditStars === lvl ? "1px solid rgba(251,191,36,.8)" : "1px solid rgba(255,255,255,.12)",
+                    background: calendarEditStars === lvl ? "rgba(251,191,36,.15)" : "rgba(255,255,255,.05)",
+                    color: calendarEditStars === lvl ? "#fcd34d" : "#6b7280",
+                  }}
+                >
+                  {"★".repeat(lvl)}
+                </button>
+              ))}
+            </div>
+            <div style={{ display: "flex", gap: 6 }}>
+              {(["blue", "rose", "green"] as TagColor[]).map((color) => {
+                const cs = COLOR_STYLES[color];
+                const active = calendarEditColor === color;
+                return (
+                  <button
+                    key={color}
+                    onClick={() => setCalendarEditColor(color)}
+                    style={{
+                      flex: 1,
+                      padding: "7px 0",
+                      borderRadius: 6,
+                      cursor: "pointer",
+                      background: cs.bg,
+                      border: `1px solid ${cs.border}`,
+                      opacity: active ? 1 : 0.45,
+                      outline: active ? `2px solid ${cs.border}` : "none",
+                      outlineOffset: 1,
+                    }}
+                  >
+                    <span style={{ fontSize: 10, color: "#cbd5e1" }}>{COLOR_LABELS[color]}</span>
+                  </button>
+                );
+              })}
+            </div>
+            <div style={{ display: "flex", justifyContent: "flex-end", gap: 8, marginTop: 2 }}>
+              <button
+                onClick={closeCalendarItemEdit}
+                style={{ padding: "7px 12px", borderRadius: 7, cursor: "pointer", fontSize: 12, background: "rgba(255,255,255,.06)", border: "1px solid rgba(255,255,255,.12)", color: "#9ca3af" }}
+              >
+                Cancel
+              </button>
+              <button
+                onClick={saveCalendarItemEdit}
+                style={{ padding: "7px 12px", borderRadius: 7, border: "none", cursor: "pointer", fontSize: 12, fontWeight: 500, background: "#6366f1", color: "#fff" }}
+              >
+                Save
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {completionPopupTask && (
         <div
