@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useRef, useEffect, useCallback } from "react";
+import { useState, useRef, useEffect } from "react";
 import { createClient } from "@/lib/supabase/client";
 
 // ── Types ──────────────────────────────────────────────────────────────────
@@ -19,6 +19,7 @@ interface Task {
   stars: StarLevel;
   color: TagColor;
   done: boolean;
+  senderEmail?: string;
 }
 
 type DbItem = {
@@ -37,6 +38,15 @@ type GmailTasksResponse = {
   tasks?: Task[];
   error?: string;
 };
+
+type FormattedDraft = {
+  recipient: string;
+  subject: string;
+  body: string;
+};
+
+const RELATIONSHIP_TAGS = ["Direct Manager", "Senior Colleague", "Peer", "Client"] as const;
+type RelationshipTag = (typeof RELATIONSHIP_TAGS)[number];
 
 // ── Constants ──────────────────────────────────────────────────────────────
 const MONTHS = [
@@ -336,11 +346,21 @@ export default function Calendar() {
   const [taskStars, setTaskStars] = useState<StarLevel>(1);
   const [taskColor, setTaskColor] = useState<TagColor>("blue");
 
-  // Email popup state
-  const [emailPopupTask, setEmailPopupTask] = useState<Task | null>(null);
   const [itemsLoading, setItemsLoading] = useState(true);
   const [gmailImporting, setGmailImporting] = useState(false);
   const [gmailImportStatus, setGmailImportStatus] = useState<string | null>(null);
+  const [gmailTaskIds, setGmailTaskIds] = useState<Set<string>>(new Set());
+
+  // Gmail completion popup state
+  const [completionPopupTask, setCompletionPopupTask] = useState<Task | null>(null);
+  const [selectedRelationshipTag, setSelectedRelationshipTag] = useState<RelationshipTag | null>(null);
+  const [relationshipDescription, setRelationshipDescription] = useState("");
+  const [completionDetails, setCompletionDetails] = useState("");
+  const [formattedDraft, setFormattedDraft] = useState<FormattedDraft | null>(null);
+  const [formattingEmail, setFormattingEmail] = useState(false);
+  const [sendingEmail, setSendingEmail] = useState(false);
+  const [popupError, setPopupError] = useState<string | null>(null);
+  const [popupSuccess, setPopupSuccess] = useState<string | null>(null);
 
   const weekScrollRef = useRef<HTMLDivElement>(null);
   const dayScrollRef  = useRef<HTMLDivElement>(null);
@@ -507,9 +527,115 @@ export default function Calendar() {
 
       if (!response.ok) {
         setTasks(prev => prev.map(t => t.id === id ? { ...t, done: existing.done } : t));
+        return;
+      }
+
+      if (nextDone && gmailTaskIds.has(id)) {
+        setCompletionPopupTask({ ...existing, done: true });
+        setSelectedRelationshipTag(null);
+        setRelationshipDescription("");
+        setCompletionDetails("");
+        setFormattedDraft(null);
+        setPopupError(null);
+        setPopupSuccess(null);
       }
     } catch {
       setTasks(prev => prev.map(t => t.id === id ? { ...t, done: existing.done } : t));
+    }
+  }
+
+  function closeCompletionPopup() {
+    setCompletionPopupTask(null);
+    setSelectedRelationshipTag(null);
+    setRelationshipDescription("");
+    setCompletionDetails("");
+    setFormattedDraft(null);
+    setPopupError(null);
+    setPopupSuccess(null);
+  }
+
+  async function formatCompletionDetails() {
+    if (!completionPopupTask) {
+      return;
+    }
+
+    if (!completionDetails.trim()) {
+      setPopupError("Please describe what you have done before formatting.");
+      return;
+    }
+
+    setFormattingEmail(true);
+    setPopupError(null);
+    setPopupSuccess(null);
+
+    try {
+      const response = await fetch("/api/gmail/format", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          taskName: completionPopupTask.title,
+          relationshipTag: selectedRelationshipTag ?? "Recipient",
+          relationshipDescription,
+          completionDetails,
+        }),
+      });
+
+      const data = (await response.json()) as { subject?: string; body?: string; error?: string };
+
+      if (!response.ok) {
+        throw new Error(data.error ?? "Failed to format email draft");
+      }
+
+      setFormattedDraft((prev) => ({
+        recipient: prev?.recipient?.trim() ? prev.recipient : completionPopupTask.senderEmail ?? "",
+        subject: data.subject ?? prev?.subject ?? "",
+        body: data.body ?? prev?.body ?? "",
+      }));
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Failed to format email draft";
+      setPopupError(message);
+    } finally {
+      setFormattingEmail(false);
+    }
+  }
+
+  async function sendFormattedEmail() {
+    if (!formattedDraft) {
+      return;
+    }
+
+    if (!formattedDraft.recipient.trim() || !formattedDraft.subject.trim() || !formattedDraft.body.trim()) {
+      setPopupError("Recipient, subject, and body are required before sending.");
+      return;
+    }
+
+    setSendingEmail(true);
+    setPopupError(null);
+    setPopupSuccess(null);
+
+    try {
+      const response = await fetch("/api/gmail/send", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          to: formattedDraft.recipient,
+          subject: formattedDraft.subject,
+          body: formattedDraft.body,
+        }),
+      });
+
+      const data = (await response.json()) as { error?: string };
+
+      if (!response.ok) {
+        throw new Error(data.error ?? "Failed to send email");
+      }
+
+      closeCompletionPopup();
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Failed to send email";
+      setPopupError(message);
+    } finally {
+      setSendingEmail(false);
     }
   }
 
@@ -555,7 +681,7 @@ export default function Calendar() {
           seenImportSignatures.add(signature);
           return true;
         })
-        .map((task) => ({ ...task, id: crypto.randomUUID(), source: "gmail" as const }));
+        .map((task) => ({ ...task, id: crypto.randomUUID() }));
 
       if (newTasks.length === 0) {
         setGmailImportStatus("No new Gmail events to add.");
@@ -579,6 +705,17 @@ export default function Calendar() {
       const failedIds = new Set(results.filter((result) => !result.ok).map((result) => result.id));
       if (failedIds.size > 0) {
         setTasks((prev) => prev.filter((task) => !failedIds.has(task.id)));
+      }
+
+      const successfulIds = newTasks
+        .filter((task) => !failedIds.has(task.id))
+        .map((task) => task.id);
+      if (successfulIds.length > 0) {
+        setGmailTaskIds((prev) => {
+          const next = new Set(prev);
+          successfulIds.forEach((id) => next.add(id));
+          return next;
+        });
       }
 
       const savedCount = newTasks.length - failedIds.size;
@@ -1174,6 +1311,238 @@ export default function Calendar() {
           </div>
         )}
       </main>
+
+      {completionPopupTask && (
+        <div
+          style={{
+            position: "fixed",
+            inset: 0,
+            background: "rgba(10, 12, 20, 0.45)",
+            backdropFilter: "blur(3px)",
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center",
+            padding: 20,
+            zIndex: 1200,
+          }}
+        >
+          <div
+            style={{
+              width: "min(980px, 100%)",
+              background: "#1f2437",
+              border: "1px solid rgba(255,255,255,.14)",
+              borderRadius: 12,
+              padding: 20,
+              boxShadow: "0 20px 40px rgba(0,0,0,.5)",
+              color: "#e5e7eb",
+            }}
+          >
+            <div
+              style={{
+                display: "grid",
+                gridTemplateColumns: formattedDraft ? "1fr 1fr" : "1fr",
+                gap: 14,
+              }}
+            >
+              <div>
+                <div style={{ display: "flex", flexWrap: "wrap", gap: 8, marginBottom: 10 }}>
+                  {RELATIONSHIP_TAGS.map((tag) => {
+                    const active = selectedRelationshipTag === tag;
+                    return (
+                      <button
+                        key={tag}
+                        onClick={() => setSelectedRelationshipTag(tag)}
+                        style={{
+                          borderRadius: 8,
+                          border: active ? "1px solid #a5b4fc" : "1px solid rgba(255,255,255,.2)",
+                          background: active ? "rgba(99,102,241,.25)" : "rgba(255,255,255,.05)",
+                          color: active ? "#c7d2fe" : "#cbd5e1",
+                          fontSize: 12,
+                          padding: "6px 10px",
+                          cursor: "pointer",
+                        }}
+                      >
+                        {tag}
+                      </button>
+                    );
+                  })}
+                </div>
+
+                <input
+                  value={relationshipDescription}
+                  onChange={(e) => setRelationshipDescription(e.target.value)}
+                  placeholder="Description of relation with recipient"
+                  style={{
+                    width: "100%",
+                    borderRadius: 8,
+                    border: "1px solid rgba(255,255,255,.18)",
+                    background: "rgba(255,255,255,.06)",
+                    color: "#e5e7eb",
+                    padding: "8px 10px",
+                    fontSize: 12,
+                    marginBottom: 10,
+                    outline: "none",
+                  }}
+                />
+
+                <textarea
+                  value={completionDetails}
+                  onChange={(e) => setCompletionDetails(e.target.value)}
+                  placeholder={`What you have done for ${completionPopupTask.title}`}
+                  style={{
+                    width: "100%",
+                    minHeight: 260,
+                    borderRadius: 8,
+                    border: "1px solid rgba(255,255,255,.18)",
+                    background: "rgba(255,255,255,.06)",
+                    color: "#e5e7eb",
+                    padding: "10px 12px",
+                    fontSize: 12,
+                    resize: "vertical",
+                    outline: "none",
+                  }}
+                />
+
+                <div style={{ display: "flex", justifyContent: "flex-end", gap: 8, marginTop: 12 }}>
+                  <button
+                    onClick={closeCompletionPopup}
+                    style={{
+                      padding: "7px 12px",
+                      borderRadius: 8,
+                      border: "1px solid rgba(255,255,255,.2)",
+                      background: "rgba(255,255,255,.06)",
+                      color: "#cbd5e1",
+                      fontSize: 12,
+                      cursor: "pointer",
+                    }}
+                  >
+                    Cancel
+                  </button>
+                  <button
+                    onClick={formatCompletionDetails}
+                    disabled={formattingEmail}
+                    style={{
+                      padding: "7px 12px",
+                      borderRadius: 8,
+                      border: "1px solid rgba(99,102,241,.6)",
+                      background: formattingEmail ? "rgba(99,102,241,.6)" : "#6366f1",
+                      color: "#fff",
+                      fontSize: 12,
+                      cursor: formattingEmail ? "not-allowed" : "pointer",
+                    }}
+                  >
+                    {formattingEmail ? "Formatting..." : "Format"}
+                  </button>
+                </div>
+              </div>
+
+              {formattedDraft && (
+                <div
+                  style={{
+                    borderRadius: 10,
+                    border: "1px solid rgba(255,255,255,.18)",
+                    background: "rgba(255,255,255,.04)",
+                    padding: 12,
+                    display: "flex",
+                    flexDirection: "column",
+                    minHeight: 0,
+                  }}
+                >
+                  <input
+                    value={formattedDraft.recipient}
+                    onChange={(e) =>
+                      setFormattedDraft((prev) =>
+                        prev ? { ...prev, recipient: e.target.value } : prev
+                      )
+                    }
+                    placeholder="Add recipients"
+                    style={{
+                      width: "100%",
+                      borderRadius: 8,
+                      border: "1px solid rgba(255,255,255,.18)",
+                      background: "rgba(255,255,255,.06)",
+                      color: "#e5e7eb",
+                      padding: "8px 10px",
+                      fontSize: 12,
+                      marginBottom: 8,
+                      outline: "none",
+                    }}
+                  />
+
+                  <input
+                    value={formattedDraft.subject}
+                    onChange={(e) =>
+                      setFormattedDraft((prev) =>
+                        prev ? { ...prev, subject: e.target.value } : prev
+                      )
+                    }
+                    placeholder="Email subject"
+                    style={{
+                      width: "100%",
+                      borderRadius: 8,
+                      border: "1px solid rgba(255,255,255,.18)",
+                      background: "rgba(255,255,255,.06)",
+                      color: "#e5e7eb",
+                      padding: "8px 10px",
+                      fontSize: 12,
+                      marginBottom: 8,
+                      outline: "none",
+                    }}
+                  />
+
+                  <textarea
+                    value={formattedDraft.body}
+                    onChange={(e) =>
+                      setFormattedDraft((prev) =>
+                        prev ? { ...prev, body: e.target.value } : prev
+                      )
+                    }
+                    placeholder="Formatted email body"
+                    style={{
+                      width: "100%",
+                      minHeight: 194,
+                      borderRadius: 8,
+                      border: "1px solid rgba(255,255,255,.18)",
+                      background: "rgba(255,255,255,.06)",
+                      color: "#e5e7eb",
+                      padding: "10px 12px",
+                      fontSize: 12,
+                      resize: "vertical",
+                      outline: "none",
+                      marginBottom: 8,
+                    }}
+                  />
+
+                  <div style={{ display: "flex", justifyContent: "flex-end" }}>
+                    <button
+                      onClick={sendFormattedEmail}
+                      disabled={sendingEmail}
+                      style={{
+                        padding: "8px 14px",
+                        borderRadius: 8,
+                        border: "1px solid rgba(16,185,129,.6)",
+                        background: sendingEmail ? "rgba(16,185,129,.55)" : "#10b981",
+                        color: "#fff",
+                        fontSize: 12,
+                        cursor: sendingEmail ? "not-allowed" : "pointer",
+                      }}
+                    >
+                      {sendingEmail ? "Sending..." : "Send"}
+                    </button>
+                  </div>
+                </div>
+              )}
+            </div>
+
+            {popupError && (
+              <p style={{ marginTop: 10, fontSize: 12, color: "#fda4af" }}>{popupError}</p>
+            )}
+            {popupSuccess && (
+              <p style={{ marginTop: 10, fontSize: 12, color: "#6ee7b7" }}>{popupSuccess}</p>
+            )}
+          </div>
+        </div>
+      )}
     </div>
   );
 }

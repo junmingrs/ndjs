@@ -19,7 +19,7 @@ type Task = {
   stars: StarLevel;
   color: TagColor;
   done: boolean;
-  source: "gmail";
+  senderEmail?: string;
 };
 
 type GmailListResponse = {
@@ -169,6 +169,24 @@ function getHeader(
   return match?.value ?? null;
 }
 
+function extractEmailAddress(value: string | null) {
+  if (!value) {
+    return null;
+  }
+
+  const angleMatch = value.match(/<([^>]+)>/);
+  if (angleMatch?.[1]) {
+    return angleMatch[1].trim().toLowerCase();
+  }
+
+  const directMatch = value.match(/[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/i);
+  if (directMatch?.[0]) {
+    return directMatch[0].trim().toLowerCase();
+  }
+
+  return null;
+}
+
 function toMessageContext(message: GmailMessageResponse) {
   const payload = message.payload;
   const headers = payload?.headers;
@@ -198,6 +216,7 @@ function toMessageContext(message: GmailMessageResponse) {
     threadId: message.threadId,
     subject: getHeader(headers, "Subject"),
     from: getHeader(headers, "From"),
+    fromEmail: extractEmailAddress(getHeader(headers, "From")),
     to: getHeader(headers, "To"),
     dateHeader: getHeader(headers, "Date"),
     internalDate: message.internalDate ?? null,
@@ -355,7 +374,7 @@ async function convertEmailToTask(
     stars: parsed.stars,
     color: parsed.color,
     done: false,
-    source: "gmail",
+    senderEmail: email.fromEmail ?? undefined,
   } as Task;
 }
 
@@ -383,7 +402,6 @@ export async function GET(request: Request) {
     }
 
     const accessToken = sessionData.session.provider_token;
-    console.log(sessionData.session);
     if (!accessToken) {
       return NextResponse.json(
         {
