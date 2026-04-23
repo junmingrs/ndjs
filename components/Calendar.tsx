@@ -754,7 +754,20 @@ export default function Calendar() {
     setCalendarImportStatus(null);
 
     try {
-      const response = await fetch("/api/google-calendar/today", {
+      const base = new Date(viewYear, viewMonth, viewDay);
+      const startOfWeek = new Date(base);
+      startOfWeek.setDate(base.getDate() - base.getDay());
+      startOfWeek.setHours(0, 0, 0, 0);
+
+      const endOfWeek = new Date(startOfWeek);
+      endOfWeek.setDate(startOfWeek.getDate() + 7);
+
+      const params = new URLSearchParams({
+        timeMin: startOfWeek.toISOString(),
+        timeMax: endOfWeek.toISOString(),
+      });
+
+      const response = await fetch(`/api/google-calendar/today?${params.toString()}`, {
         method: "GET",
         cache: "no-store",
       });
@@ -784,7 +797,7 @@ export default function Calendar() {
         .map((task) => ({ ...task, id: crypto.randomUUID() }));
 
       if (newTasks.length === 0) {
-        setCalendarImportStatus("No new Google Calendar events to add.");
+        setCalendarImportStatus("No new Google Calendar events found for this week.");
         return;
       }
 
@@ -818,7 +831,7 @@ export default function Calendar() {
         return;
       }
 
-      setCalendarImportStatus(`Added ${savedCount} Google Calendar events.`);
+      setCalendarImportStatus(`Added ${savedCount} Google Calendar events for this week.`);
     } catch (error) {
       const message = error instanceof Error ? error.message : "Failed to import Google Calendar events";
       setCalendarImportStatus(message);

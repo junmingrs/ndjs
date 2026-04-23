@@ -69,41 +69,40 @@ function parseEventDate(value: { dateTime?: string; date?: string } | undefined,
   return null;
 }
 
-function toDayWindow(dateParam: string | null) {
-  if (!dateParam) {
-    const now = new Date();
-    const year = now.getUTCFullYear();
-    const month = now.getUTCMonth();
-    const day = now.getUTCDate();
-    const start = Date.UTC(year, month, day, 0, 0, 0, 0);
-    const end = Date.UTC(year, month, day + 1, 0, 0, 0, 0);
+function toWindow(searchParams: URLSearchParams) {
+  const timeMinParam = searchParams.get("timeMin");
+  const timeMaxParam = searchParams.get("timeMax");
+
+  if (timeMinParam || timeMaxParam) {
+    if (!timeMinParam || !timeMaxParam) {
+      throw new Error("timeMin and timeMax must be provided together");
+    }
+
+    const start = new Date(timeMinParam);
+    const end = new Date(timeMaxParam);
+
+    if (Number.isNaN(start.getTime()) || Number.isNaN(end.getTime())) {
+      throw new Error("timeMin/timeMax must be valid ISO datetimes");
+    }
+
+    if (start >= end) {
+      throw new Error("timeMin must be earlier than timeMax");
+    }
 
     return {
-      date: new Date(start).toISOString().slice(0, 10),
-      startIso: new Date(start).toISOString(),
-      endIso: new Date(end).toISOString(),
+      startIso: start.toISOString(),
+      endIso: end.toISOString(),
     };
   }
 
-  if (!/^\d{4}-\d{2}-\d{2}$/.test(dateParam)) {
-    throw new Error("date must use YYYY-MM-DD format");
-  }
-
-  const [yearRaw, monthRaw, dayRaw] = dateParam.split("-");
-  const year = Number(yearRaw);
-  const month = Number(monthRaw);
-  const day = Number(dayRaw);
-
-  const start = Date.UTC(year, month - 1, day, 0, 0, 0, 0);
-  const end = Date.UTC(year, month - 1, day + 1, 0, 0, 0, 0);
-  const isoDate = new Date(start).toISOString().slice(0, 10);
-
-  if (isoDate !== dateParam) {
-    throw new Error("date is invalid");
-  }
+  const now = new Date();
+  const year = now.getUTCFullYear();
+  const month = now.getUTCMonth();
+  const day = now.getUTCDate();
+  const start = Date.UTC(year, month, day, 0, 0, 0, 0);
+  const end = Date.UTC(year, month, day + 1, 0, 0, 0, 0);
 
   return {
-    date: dateParam,
     startIso: new Date(start).toISOString(),
     endIso: new Date(end).toISOString(),
   };
@@ -167,7 +166,7 @@ export async function GET(request: Request) {
     }
 
     const { searchParams } = new URL(request.url);
-    const { date, startIso, endIso } = toDayWindow(searchParams.get("date"));
+    const { startIso, endIso } = toWindow(searchParams);
 
     const params = new URLSearchParams({
       singleEvents: "true",
@@ -198,7 +197,8 @@ export async function GET(request: Request) {
     const tasks = (data.items ?? []).map(toTask).filter((task): task is CalendarTask => Boolean(task));
 
     return NextResponse.json({
-      date,
+      timeMin: startIso,
+      timeMax: endIso,
       totalEvents: tasks.length,
       tasks,
     });
