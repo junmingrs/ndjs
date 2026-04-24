@@ -12,6 +12,7 @@ interface Task {
   id: string;
   title: string;
   description: string;
+  message?: string;
   date: string;        // "YYYY-MM-DD"
   timeStr: string;     // "HH:MM" start
   endTimeStr: string;  // "HH:MM" end
@@ -879,9 +880,40 @@ export default function Calendar() {
                         {t.description}
                       </div>
                     )}
-                    <div style={{ display: "flex", alignItems: "center", gap: 6, marginTop: 4 }}>
-                      <span style={{ fontSize: 10, color: "#94a3b8" }}>{t.date}</span>
-                      {t.timeStr && <span style={{ marginLeft: "auto", fontSize: 10, color: "#94a3b8" }}>{fmt12(t.timeStr)}{t.endTimeStr ? ` – ${fmt12(t.endTimeStr)}` : ""}</span>}
+                    {t.message && (
+                      <div
+                        style={{
+                          marginTop: 5,
+                        }}
+                      >
+                        <div
+                          style={{
+                            fontSize: 10,
+                            color: t.done && t.color === "green" ? "#6b7280" : "#9ca3af",
+                            textTransform: "uppercase",
+                            letterSpacing: "0.08em",
+                            marginBottom: 2,
+                          }}
+                        >
+                          Message
+                        </div>
+                        <div style={{
+                          fontSize: 11,
+                          color: t.done && t.color === "green" ? "#6b7280" : "#cbd5e1",
+                          overflow: "hidden",
+                          textOverflow: "ellipsis",
+                          display: "-webkit-box",
+                          WebkitLineClamp: 2,
+                          WebkitBoxOrient: "vertical",
+                          textDecoration: t.done && t.color === "green" ? "line-through" : "none",
+                        }}>
+                          {t.message}
+                        </div>
+                      </div>
+                    )}
+                    <div style={{ display: "flex", alignItems: "center", gap: 6, marginTop: 2 }}>
+                      <span style={{ fontSize: 10, color: "#6b7280" }}>{t.date}</span>
+                      {t.timeStr && <span style={{ marginLeft: "auto", fontSize: 10, color: "#9ca3af" }}>{fmt12(t.timeStr)}{t.endTimeStr ? ` – ${fmt12(t.endTimeStr)}` : ""}</span>}
                     </div>
                     <div style={{ display: "flex", alignItems: "center", gap: 6, marginTop: 6 }}>
                       <div style={{ width: 8, height: 8, borderRadius: "50%", background: t.done && t.color === "green" ? "#cbd5e1" : cs.dot }} />
