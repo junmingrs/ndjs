@@ -4,6 +4,7 @@ import { createClient } from "@/lib/supabase/server";
 
 type CalendarEventItem = {
   id?: string;
+  iCalUID?: string;
   summary?: string;
   description?: string;
   start?: {
@@ -18,6 +19,19 @@ type CalendarEventItem = {
 
 type CalendarEventsResponse = {
   items?: CalendarEventItem[];
+  error?: {
+    message?: string;
+  };
+};
+
+type CalendarListItem = {
+  id?: string;
+  summary?: string;
+};
+
+type CalendarListResponse = {
+  items?: CalendarListItem[];
+  nextPageToken?: string;
   error?: {
     message?: string;
   };
@@ -110,7 +124,7 @@ function toWindow(searchParams: URLSearchParams) {
   };
 }
 
-function toTask(event: CalendarEventItem): CalendarTask | null {
+function toTask(event: CalendarEventItem, calendarId: string): CalendarTask | null {
   const title = event.summary?.trim() || "Google Calendar event";
 
   const start = parseEventDate(event.start, 9);
@@ -120,7 +134,7 @@ function toTask(event: CalendarEventItem): CalendarTask | null {
   }
 
   return {
-    id: event.id ?? crypto.randomUUID(),
+    id: `${calendarId}:${event.id ?? event.iCalUID ?? crypto.randomUUID()}`,
     title,
     description: event.description?.trim() ?? "",
     date: toDateStr(start),
@@ -132,6 +146,84 @@ function toTask(event: CalendarEventItem): CalendarTask | null {
     color: "blue",
     done: false,
   };
+}
+
+async function listUserCalendars(accessToken: string) {
+  const calendars: Array<{ id: string; summary: string }> = [];
+  let nextPageToken: string | undefined;
+
+  do {
+    const params = new URLSearchParams({
+      maxResults: "250",
+      minAccessRole: "reader",
+    });
+
+    if (nextPageToken) {
+      params.set("pageToken", nextPageToken);
+    }
+
+    const response = await fetch(
+      `https://www.googleapis.com/calendar/v3/users/me/calendarList?${params.toString()}`,
+      {
+        headers: {
+          Authorization: `Bearer ${accessToken}`,
+        },
+        cache: "no-store",
+      }
+    );
+
+    const data = (await response.json()) as CalendarListResponse;
+    if (!response.ok) {
+      throw new Error(data.error?.message ?? "Failed to list Google Calendars");
+    }
+
+    for (const calendar of data.items ?? []) {
+      if (!calendar.id) {
+        continue;
+      }
+
+      calendars.push({
+        id: calendar.id,
+        summary: calendar.summary?.trim() || "Calendar",
+      });
+    }
+
+    nextPageToken = data.nextPageToken;
+  } while (nextPageToken);
+
+  return calendars;
+}
+
+async function fetchCalendarEvents(
+  accessToken: string,
+  calendarId: string,
+  startIso: string,
+  endIso: string
+) {
+  const params = new URLSearchParams({
+    singleEvents: "true",
+    orderBy: "startTime",
+    timeMin: startIso,
+    timeMax: endIso,
+    maxResults: "250",
+  });
+
+  const response = await fetch(
+    `https://www.googleapis.com/calendar/v3/calendars/${encodeURIComponent(calendarId)}/events?${params.toString()}`,
+    {
+      headers: {
+        Authorization: `Bearer ${accessToken}`,
+      },
+      cache: "no-store",
+    }
+  );
+
+  const data = (await response.json()) as CalendarEventsResponse;
+  if (!response.ok) {
+    throw new Error(data.error?.message ?? `Failed to fetch events for calendar ${calendarId}`);
+  }
+
+  return data.items ?? [];
 }
 
 export async function GET(request: Request) {
@@ -171,37 +263,33 @@ export async function GET(request: Request) {
     const { searchParams } = new URL(request.url);
     const { startIso, endIso } = toWindow(searchParams);
 
-    const params = new URLSearchParams({
-      singleEvents: "true",
-      orderBy: "startTime",
-      timeMin: startIso,
-      timeMax: endIso,
-      maxResults: "250",
-    });
+    const calendars = await listUserCalendars(accessToken);
 
-    const response = await fetch(
-      `https://www.googleapis.com/calendar/v3/calendars/primary/events?${params.toString()}`,
-      {
-        headers: {
-          Authorization: `Bearer ${accessToken}`,
-        },
-        cache: "no-store",
-      }
-    );
-
-    const data = (await response.json()) as CalendarEventsResponse;
-    if (!response.ok) {
-      return NextResponse.json(
-        { error: data.error?.message ?? "Failed to fetch Google Calendar events" },
-        { status: 400 }
-      );
+    if (calendars.length === 0) {
+      return NextResponse.json({
+        timeMin: startIso,
+        timeMax: endIso,
+        totalCalendars: 0,
+        totalEvents: 0,
+        tasks: [],
+      });
     }
 
-    const tasks = (data.items ?? []).map(toTask).filter((task): task is CalendarTask => Boolean(task));
+    const eventsByCalendar = await Promise.all(
+      calendars.map(async (calendar) => ({
+        calendar,
+        events: await fetchCalendarEvents(accessToken, calendar.id, startIso, endIso),
+      }))
+    );
+
+    const tasks = eventsByCalendar
+      .flatMap(({ calendar, events }) => events.map((event) => toTask(event, calendar.id)))
+      .filter((task): task is CalendarTask => Boolean(task));
 
     return NextResponse.json({
       timeMin: startIso,
       timeMax: endIso,
+      totalCalendars: calendars.length,
       totalEvents: tasks.length,
       tasks,
     });

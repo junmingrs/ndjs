@@ -442,6 +442,7 @@ export default function Calendar() {
   const [taskEndTime, setTaskEndTime] = useState("10:00");
   const [taskStars, setTaskStars] = useState<StarLevel>(1);
   const [taskColor, setTaskColor] = useState<TagColor>("blue");
+  const [createTaskPopupOpen, setCreateTaskPopupOpen] = useState(false);
 
   const [itemsLoading, setItemsLoading] = useState(true);
   const [gmailImporting, setGmailImporting] = useState(false);
@@ -525,7 +526,7 @@ export default function Calendar() {
 
   // ── Task helpers ──────────────────────────────────────────────────────
   async function addTask() {
-    if (!taskTitle.trim() || !taskDate) return;
+    if (!taskTitle.trim() || !taskDate) return false;
     const [hour, minute] = taskTime.split(":").map(Number);
     const newTask: Task = {
       id: crypto.randomUUID(),
@@ -559,6 +560,7 @@ export default function Calendar() {
 
     setTaskTitle("");
     setTaskDescription("");
+    return true;
   }
 
   async function deleteTask(id: string) {
@@ -1178,88 +1180,23 @@ export default function Calendar() {
           {calendarImportStatus && (
             <p style={{ fontSize: 11, color: "#9ca3af", marginTop: 8 }}>{calendarImportStatus}</p>
           )}
-        </div>
-
-        {/* Form */}
-        <div style={S.formArea}>
-          <input
-            style={S.input}
-            value={taskTitle}
-            onChange={e => setTaskTitle(e.target.value)}
-            onKeyDown={e => e.key === "Enter" && addTask()}
-            placeholder="Task title..."
-          />
-          <textarea
-            style={{ ...S.input, minHeight: 74, resize: "vertical", paddingTop: 8 }}
-            value={taskDescription}
-            onChange={e => setTaskDescription(e.target.value)}
-            placeholder="Task description..."
-          />
-          <div style={{ display: "flex", gap: 8 }}>
-            <div style={{ flex: 1, minWidth: 0 }}>
-              <label style={S.label}>Date</label>
-              <input style={S.input} type="date" value={taskDate} onChange={e => setTaskDate(e.target.value)} />
-            </div>
-          </div>
-          <div style={{ display: "flex", gap: 8 }}>
-            <div style={{ flex: 1, minWidth: 0 }}>
-              <label style={S.label}>Start Time</label>
-              <input style={S.input} type="time" value={taskTime} onChange={e => setTaskTime(e.target.value)} />
-            </div>
-            <div style={{ flex: 1, minWidth: 0 }}>
-              <label style={S.label}>End Time</label>
-              <input style={S.input} type="time" value={taskEndTime} onChange={e => setTaskEndTime(e.target.value)} />
-            </div>
-          </div>
-          <div>
-            <label style={S.label}>Importance</label>
-            <div style={{ display: "flex", gap: 6 }}>
-              {([1, 2, 3] as StarLevel[]).map(lvl => (
-                <button key={lvl} onClick={() => setTaskStars(lvl)} style={{
-                  flex: 1, display: "flex", alignItems: "center", justifyContent: "center",
-                  padding: "6px 0", borderRadius: 8, cursor: "pointer", fontSize: 11, transition: "all .15s",
-                  border: taskStars === lvl ? "1px solid rgba(251,191,36,.8)" : "1px solid rgba(255,255,255,.12)",
-                  background: taskStars === lvl ? "rgba(251,191,36,.15)" : "rgba(255,255,255,.05)",
-                  color: taskStars === lvl ? "#fcd34d" : "#6b7280",
-                }}>
-                  {"★".repeat(lvl)}
-                </button>
-              ))}
-            </div>
-            <div style={{ display: "flex", gap: 6, marginTop: 3 }}>
-              {["Low","Med","High"].map(l => (
-                <span key={l} style={{ flex: 1, textAlign: "center", fontSize: 10, color: "#6b7280" }}>{l}</span>
-              ))}
-            </div>
-          </div>
-          <div>
-            <label style={S.label}>Color Tag</label>
-            <div style={{ display: "flex", gap: 6 }}>
-              {(["blue","rose","green"] as TagColor[]).map(c => {
-                const cs = COLOR_STYLES[c];
-                const active = taskColor === c;
-                return (
-                  <button key={c} onClick={() => setTaskColor(c)} style={{
-                    flex: 1, padding: "8px 0", borderRadius: 8, cursor: "pointer",
-                    display: "flex", flexDirection: "column", alignItems: "center", gap: 3,
-                    transition: "all .15s", opacity: active ? 1 : 0.45,
-                    background: cs.bg, border: `1px solid ${cs.border}`,
-                    outline: active ? `2px solid ${cs.border}` : "none", outlineOffset: 2,
-                  }}>
-                    <div style={{ width: 10, height: 10, borderRadius: "50%", background: cs.dot }} />
-                    <span style={{ fontSize: 10, color: "#9ca3af" }}>{COLOR_LABELS[c]}</span>
-                  </button>
-                );
-              })}
-            </div>
-          </div>
-          <button onClick={addTask} disabled={!taskTitle.trim()} style={{
-            width: "100%", padding: 10, borderRadius: 8, border: "none",
-            background: taskTitle.trim() ? "#6366f1" : "rgba(99,102,241,.3)",
-            color: "#fff", fontSize: 13, fontWeight: 500, cursor: taskTitle.trim() ? "pointer" : "not-allowed",
-            transition: "all .15s",
-          }}>
-            + Add Task
+          <button
+            onClick={() => setCreateTaskPopupOpen(true)}
+            style={{
+              marginTop: 8,
+              width: "100%",
+              padding: "8px 10px",
+              borderRadius: 8,
+              border: "1px solid rgba(96,165,250,.35)",
+              background: "rgba(59,130,246,.15)",
+              color: "#bfdbfe",
+              fontSize: 12,
+              fontWeight: 500,
+              cursor: "pointer",
+              transition: "all .15s",
+            }}
+          >
+            Create task
           </button>
         </div>
 
@@ -1281,7 +1218,7 @@ export default function Calendar() {
         <div style={{ flex: 1, overflowY: "auto", padding: "12px 14px", display: "flex", flexDirection: "column", gap: 8 }}>
           {!itemsLoading && displayedTasks.length === 0 && (
             <p style={{ textAlign: "center", fontSize: 12, color: "#6b7280", marginTop: 32 }}>
-              No tasks yet. Add one above!
+              No tasks yet. Create one from the button above.
             </p>
           )}
           {displayedTasks.map(t => {
@@ -1653,6 +1590,196 @@ export default function Calendar() {
           </div>
         )}
       </main>
+
+      {createTaskPopupOpen && (
+        <div
+          style={{
+            position: "fixed",
+            inset: 0,
+            background: "rgba(10, 12, 20, 0.45)",
+            backdropFilter: "blur(3px)",
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center",
+            padding: 20,
+            zIndex: 1220,
+          }}
+        >
+          <div
+            style={{
+              width: "min(520px, 100%)",
+              maxHeight: "min(90vh, 780px)",
+              overflowY: "auto",
+              background: "#1f2437",
+              border: "1px solid rgba(255,255,255,.14)",
+              borderRadius: 12,
+              padding: 16,
+              boxShadow: "0 20px 40px rgba(0,0,0,.5)",
+              color: "#e5e7eb",
+              display: "flex",
+              flexDirection: "column",
+              gap: 10,
+            }}
+          >
+            <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+              <div style={{ fontSize: 13, fontWeight: 600, color: "#bfdbfe" }}>Create task</div>
+              <button
+                onClick={() => setCreateTaskPopupOpen(false)}
+                style={{
+                  border: "none",
+                  background: "none",
+                  color: "#94a3b8",
+                  cursor: "pointer",
+                  fontSize: 16,
+                  lineHeight: 1,
+                  padding: 0,
+                }}
+              >
+                ×
+              </button>
+            </div>
+
+            <input
+              style={S.input}
+              value={taskTitle}
+              onChange={(e) => setTaskTitle(e.target.value)}
+              onKeyDown={async (e) => {
+                if (e.key !== "Enter") return;
+                const created = await addTask();
+                if (created) setCreateTaskPopupOpen(false);
+              }}
+              placeholder="Task title..."
+              autoFocus
+            />
+            <textarea
+              style={{ ...S.input, minHeight: 74, resize: "vertical", paddingTop: 8 }}
+              value={taskDescription}
+              onChange={(e) => setTaskDescription(e.target.value)}
+              placeholder="Task description..."
+            />
+            <div style={{ display: "flex", gap: 8 }}>
+              <div style={{ flex: 1, minWidth: 0 }}>
+                <label style={S.label}>Date</label>
+                <input style={S.input} type="date" value={taskDate} onChange={(e) => setTaskDate(e.target.value)} />
+              </div>
+            </div>
+            <div style={{ display: "flex", gap: 8 }}>
+              <div style={{ flex: 1, minWidth: 0 }}>
+                <label style={S.label}>Start Time</label>
+                <input style={S.input} type="time" value={taskTime} onChange={(e) => setTaskTime(e.target.value)} />
+              </div>
+              <div style={{ flex: 1, minWidth: 0 }}>
+                <label style={S.label}>End Time</label>
+                <input style={S.input} type="time" value={taskEndTime} onChange={(e) => setTaskEndTime(e.target.value)} />
+              </div>
+            </div>
+            <div>
+              <label style={S.label}>Importance</label>
+              <div style={{ display: "flex", gap: 6 }}>
+                {([1, 2, 3] as StarLevel[]).map((lvl) => (
+                  <button
+                    key={lvl}
+                    onClick={() => setTaskStars(lvl)}
+                    style={{
+                      flex: 1,
+                      display: "flex",
+                      alignItems: "center",
+                      justifyContent: "center",
+                      padding: "6px 0",
+                      borderRadius: 8,
+                      cursor: "pointer",
+                      fontSize: 11,
+                      transition: "all .15s",
+                      border: taskStars === lvl ? "1px solid rgba(251,191,36,.8)" : "1px solid rgba(255,255,255,.12)",
+                      background: taskStars === lvl ? "rgba(251,191,36,.15)" : "rgba(255,255,255,.05)",
+                      color: taskStars === lvl ? "#fcd34d" : "#6b7280",
+                    }}
+                  >
+                    {"★".repeat(lvl)}
+                  </button>
+                ))}
+              </div>
+              <div style={{ display: "flex", gap: 6, marginTop: 3 }}>
+                {["Low", "Med", "High"].map((level) => (
+                  <span key={level} style={{ flex: 1, textAlign: "center", fontSize: 10, color: "#6b7280" }}>
+                    {level}
+                  </span>
+                ))}
+              </div>
+            </div>
+            <div>
+              <label style={S.label}>Color Tag</label>
+              <div style={{ display: "flex", gap: 6 }}>
+                {(["blue", "rose", "green"] as TagColor[]).map((color) => {
+                  const cs = COLOR_STYLES[color];
+                  const active = taskColor === color;
+                  return (
+                    <button
+                      key={color}
+                      onClick={() => setTaskColor(color)}
+                      style={{
+                        flex: 1,
+                        padding: "8px 0",
+                        borderRadius: 8,
+                        cursor: "pointer",
+                        display: "flex",
+                        flexDirection: "column",
+                        alignItems: "center",
+                        gap: 3,
+                        transition: "all .15s",
+                        opacity: active ? 1 : 0.45,
+                        background: cs.bg,
+                        border: `1px solid ${cs.border}`,
+                        outline: active ? `2px solid ${cs.border}` : "none",
+                        outlineOffset: 2,
+                      }}
+                    >
+                      <div style={{ width: 10, height: 10, borderRadius: "50%", background: cs.dot }} />
+                      <span style={{ fontSize: 10, color: "#9ca3af" }}>{COLOR_LABELS[color]}</span>
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+            <div style={{ display: "flex", justifyContent: "flex-end", gap: 8, marginTop: 2 }}>
+              <button
+                onClick={() => setCreateTaskPopupOpen(false)}
+                style={{
+                  padding: "7px 12px",
+                  borderRadius: 7,
+                  cursor: "pointer",
+                  fontSize: 12,
+                  background: "rgba(255,255,255,.06)",
+                  border: "1px solid rgba(255,255,255,.12)",
+                  color: "#9ca3af",
+                }}
+              >
+                Cancel
+              </button>
+              <button
+                onClick={async () => {
+                  const created = await addTask();
+                  if (created) setCreateTaskPopupOpen(false);
+                }}
+                disabled={!taskTitle.trim()}
+                style={{
+                  padding: "7px 12px",
+                  borderRadius: 7,
+                  border: "none",
+                  background: taskTitle.trim() ? "#6366f1" : "rgba(99,102,241,.3)",
+                  color: "#fff",
+                  fontSize: 12,
+                  fontWeight: 500,
+                  cursor: taskTitle.trim() ? "pointer" : "not-allowed",
+                  transition: "all .15s",
+                }}
+              >
+                + Add Task
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {calendarEditTaskId && (
         <div

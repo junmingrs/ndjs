@@ -1,5 +1,7 @@
 ### 1) Email-to-Task Workflow
 - After receiving email, summarise the email's task, find a suitable name for the task 
+- Decide whether it is an advertisement or not
+- DO NOT create task if it is an advertisement
 - Summarise this email and return in json
 - format:
 
