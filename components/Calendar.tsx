@@ -730,7 +730,7 @@ export default function Calendar() {
     aside: { width: 280, minWidth: 280, display: "flex", flexDirection: "column", background: "#ffffff", borderRight: "1px solid #e2e8f0", boxShadow: "2px 0 8px rgba(0,0,0,0.02)" },
     panelHead: { padding: "20px 18px 16px", borderBottom: "1px solid #e2e8f0" },
     label: { fontSize: 10, textTransform: "uppercase", letterSpacing: "0.08em", color: "#94a3b8", display: "block", marginBottom: 5, fontWeight: 600 },
-    input: { width: "100%", background: "#f8fafc", border: "1px solid #e2e8f0", borderRadius: 10, padding: "8px 12px", fontSize: 13, color: "#1e293b", outline: "none", transition: "all 0.15s", ":focus": { borderColor: "#6366f1", boxShadow: "0 0 0 3px rgba(99,102,241,0.1)" } },
+    input: { width: "100%", background: "#f8fafc", border: "1px solid #e2e8f0", borderRadius: 10, padding: "8px 12px", fontSize: 13, color: "#1e293b", outline: "none", transition: "all 0.15s" },
     main: { flex: 1, display: "flex", flexDirection: "column", minWidth: 0, overflow: "hidden" },
     calHeader: { display: "flex", alignItems: "center", gap: 12, padding: "12px 20px", borderBottom: "1px solid #e2e8f0", background: "#ffffff", flexShrink: 0 },
   };
