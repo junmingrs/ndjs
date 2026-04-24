@@ -12,6 +12,7 @@ interface Task {
   id: string;
   title: string;
   description: string;
+  message?: string;
   date: string;        // "YYYY-MM-DD"
   timeStr: string;     // "HH:MM" start
   endTimeStr: string;  // "HH:MM" end
@@ -1334,6 +1335,37 @@ export default function Calendar() {
                         textDecoration: t.done && t.color === "green" ? "line-through" : "none",
                       }}>
                         {t.description}
+                      </div>
+                    )}
+                    {t.message && (
+                      <div
+                        style={{
+                          marginTop: 5,
+                        }}
+                      >
+                        <div
+                          style={{
+                            fontSize: 10,
+                            color: t.done && t.color === "green" ? "#6b7280" : "#9ca3af",
+                            textTransform: "uppercase",
+                            letterSpacing: "0.08em",
+                            marginBottom: 2,
+                          }}
+                        >
+                          Message
+                        </div>
+                        <div style={{
+                          fontSize: 11,
+                          color: t.done && t.color === "green" ? "#6b7280" : "#cbd5e1",
+                          overflow: "hidden",
+                          textOverflow: "ellipsis",
+                          display: "-webkit-box",
+                          WebkitLineClamp: 2,
+                          WebkitBoxOrient: "vertical",
+                          textDecoration: t.done && t.color === "green" ? "line-through" : "none",
+                        }}>
+                          {t.message}
+                        </div>
                       </div>
                     )}
                     <div style={{ display: "flex", alignItems: "center", gap: 6, marginTop: 2 }}>

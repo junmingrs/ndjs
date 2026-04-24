@@ -12,6 +12,7 @@ type Task = {
   id: string;
   title: string;
   description: string;
+  message?: string;
   date: string;
   timeStr: string;
   endTimeStr: string;
@@ -60,6 +61,7 @@ type OpenAIResponse = {
 };
 
 type TaskCandidate = {
+  classification: "advertisement" | "genuine";
   title: string;
   description: string;
   timeStr: string;
@@ -292,7 +294,7 @@ async function convertEmailToTask(
   email: ReturnType<typeof toMessageContext>,
   fallbackDate: string,
   instructions: string
-) {
+): Promise<Task | null> {
   const apiKey = process.env.OPENAI_API_KEY;
   if (!apiKey) {
     throw new Error("OPENAI_API_KEY is not configured");
@@ -317,28 +319,40 @@ async function convertEmailToTask(
           schema: {
             type: "object",
             additionalProperties: false,
-            properties: {
-              title: { type: "string", minLength: 1 },
-              description: { type: "string", minLength: 1 },
-              timeStr: {
-                type: "string",
-                pattern: "^(?:[01]\\d|2[0-3]):[0-5]\\d$",
+              properties: {
+               classification: {
+                 type: "string",
+                 enum: ["advertisement", "genuine"],
+               },
+               title: { type: "string", minLength: 1 },
+               description: { type: "string", minLength: 1 },
+               timeStr: {
+                 type: "string",
+                 pattern: "^(?:[01]\\d|2[0-3]):[0-5]\\d$",
               },
               endTimeStr: {
                 type: "string",
                 pattern: "^(?:[01]\\d|2[0-3]):[0-5]\\d$",
               },
               stars: { type: "integer", enum: [1, 2, 3] },
-              color: { type: "string", enum: ["blue", "rose", "green"] },
-            },
-            required: ["title", "description", "timeStr", "endTimeStr", "stars", "color"],
-          },
-        },
-      },
+               color: { type: "string", enum: ["blue", "rose", "green"] },
+             },
+             required: [
+               "classification",
+               "title",
+               "description",
+               "timeStr",
+               "endTimeStr",
+               "stars",
+               "color",
+             ],
+           },
+         },
+       },
       messages: [
         {
           role: "system",
-            content: `${instructions}\n\nAdditional hard requirements:\n- Return JSON only (schema enforced).\n- Infer a practical task title from the email.\n- Add a concise description (1-2 lines) summarizing what needs to be done.\n- If timing is unclear, use 09:00 to 10:00.\n- Use stars to estimate effort/priority (1 low, 3 high).\n- Use color from interface enum: green for task/action, rose for meeting/call, blue for generic event.`,
+            content: `${instructions}\n\nAdditional hard requirements:\n- Return JSON only (schema enforced).\n- Set classification to advertisement for promotional, engagement-nudge, platform-generated, upgrade, invitation, outreach, and non-personal automated alerts.\n- Set classification to genuine only for clear direct communication or truly actionable requests.\n- Infer a practical task title from the email.\n- Add a concise description (1-2 lines) summarizing what needs to be done.\n- If timing is unclear, use 09:00 to 10:00.\n- Use stars to estimate effort/priority (1 low, 3 high).\n- Use color from interface enum: green for task/action, rose for meeting/call, blue for generic event.`,
         },
           {
             role: "user",
@@ -365,6 +379,10 @@ async function convertEmailToTask(
 
   const parsed = JSON.parse(content) as TaskCandidate;
 
+  if (parsed.classification === "advertisement") {
+    return null;
+  }
+
   const [hour, minute] = parsed.timeStr.split(":").map(Number);
 
   let taskDate = fallbackDate;
@@ -383,6 +401,7 @@ async function convertEmailToTask(
     id: email.id,
     title: parsed.title,
     description: parsed.description,
+    message: email.bodyText,
     date: taskDate,
     timeStr: parsed.timeStr,
     endTimeStr: parsed.endTimeStr,
@@ -452,9 +471,11 @@ export async function GET(request: Request) {
     const instructions = await readEmailInstructions();
     const contexts = messages.map(toMessageContext);
 
-    const tasks = await Promise.all(
+    const parsedTasks = await Promise.all(
       contexts.map((email) => convertEmailToTask(email, defaultDate, instructions))
     );
+
+    const tasks = parsedTasks.filter((task): task is Task => Boolean(task));
 
     return NextResponse.json({
       date: defaultDate,
